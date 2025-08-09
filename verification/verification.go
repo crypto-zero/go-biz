@@ -122,6 +122,7 @@ type CodeCache interface {
 	// DeleteEcdsaCode deletes the stored ecdsa verification code.
 	DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error
 }
+
 // PeekMobileCode gets the mobile verification code without deleting it.
 func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (*MobileCode, error) {
 	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
@@ -223,7 +224,9 @@ func (s StaticCodeGenerator) NewSequence() string {
 }
 
 func (s StaticCodeGenerator) NewCode() (code string, length int32) {
-	return "666666", 6 // nolint // always return 666666 for testing
+	// Return a random 4-digit code, zero-padded
+	n := rand.IntN(10000)
+	return fmt.Sprintf("%04d", n), 4
 }
 
 func (s StaticCodeGenerator) NewMobileCode(_ context.Context,
@@ -438,9 +441,9 @@ func (v CodeCacheImpl) GetEcdsaCode(ctx context.Context, typ, sequence, chain, a
 type AliyunSmsSender struct {
 	AccessKeyId     string
 	AccessKeySecret string
-	RegionId        string 
-	SignName        string 
-	TemplateCode    string 
+	RegionId        string
+	SignName        string
+	TemplateCode    string
 }
 
 // newClient builds a Dysms client with the configured credentials.
@@ -483,11 +486,11 @@ func (a *AliyunSmsSender) Send(ctx context.Context, mc *MobileCode) error {
 	}
 
 	req := &dysms.SendSmsRequest{
-		PhoneNumbers: tea.String(formatAliyunPhone(mc.Mobile, mc.CountryCode)),
-		SignName:     tea.String(a.SignName),
-		TemplateCode: tea.String(a.TemplateCode),
+		PhoneNumbers:  tea.String(formatAliyunPhone(mc.Mobile, mc.CountryCode)),
+		SignName:      tea.String(a.SignName),
+		TemplateCode:  tea.String(a.TemplateCode),
 		TemplateParam: tea.String(string(b)),
-		OutId:        tea.String(mc.Sequence), // helpful for tracing/idempotency on our side
+		OutId:         tea.String(mc.Sequence), // helpful for tracing/idempotency on our side
 	}
 
 	resp, err := client.SendSms(req)
@@ -531,12 +534,12 @@ func constantEqualHex(a, b string) bool {
 
 // VerificationService encapsulates sending and verifying OTP codes.
 type VerificationService struct {
-	Cache        CodeCache
-	SMSSender    MobileCodeSender
-	Generator    CodeGenerator
+	Cache     CodeCache
+	SMSSender MobileCodeSender
+	Generator CodeGenerator
 	// Policy
-	TTL          time.Duration       // e.g., 5 * time.Minute
-	Secret       []byte              // HMAC secret for hashing codes at rest
+	TTL    time.Duration // e.g., 5 * time.Minute
+	Secret []byte        // HMAC secret for hashing codes at rest
 }
 
 // SendMobileOTP generates a code, stores only its HMAC hash, sends SMS, and returns the sequence.
@@ -563,7 +566,6 @@ func (s *VerificationService) SendMobileOTP(ctx context.Context, typ string, use
 	}
 	return mc.Sequence, nil
 }
-
 
 func (s *VerificationService) VerifyMobileOTP(ctx context.Context, typ, sequence, mobile, country, input string) (bool, error) {
 	if s.Cache == nil || s.Generator == nil {

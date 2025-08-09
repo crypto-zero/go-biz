@@ -12,6 +12,27 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// isNDigits returns true if s is exactly n ASCII digits.
+func isNDigits(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// wrongCodeFor returns a 4-digit code that differs from sent.
+func wrongCodeFor(sent string) string {
+	if sent != "0000" {
+		return "0000"
+	}
+	return "0001"
+}
+
 // getRedisClient returns a redis client. If REDIS_ADDR is empty, it spins up a miniredis.
 func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Duration)) {
 	t.Helper()
@@ -91,7 +112,7 @@ func TestVerification_Service_SendAndVerify(t *testing.T) {
 	svc := &VerificationService{
 		Cache:     cache,
 		SMSSender: fake,
-		Generator: NewStaticCodeGenerator(), // returns 666666
+		Generator: NewStaticCodeGenerator(), // returns random 4-digit code
 		TTL:       5 * time.Minute,
 		Secret:    []byte("test-secret-32-bytes-minimum-abcdefgh"),
 	}
@@ -101,26 +122,29 @@ func TestVerification_Service_SendAndVerify(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
 	if assert.NotNil(t, fake.last) {
+		// plaintext sent out must be 4 numeric digits
+		assert.True(t, isNDigits(fake.last.Code.Code, 4), "code should be 4 digits, got: %q", fake.last.Code.Code)
+		code := fake.last.Code.Code
+
 		assert.Equal(t, "13800138000", fake.last.Mobile)
 		assert.Equal(t, "86", fake.last.CountryCode)
-		assert.Equal(t, "666666", fake.last.Code.Code) // plaintext sent out
-	}
 
-	// Ensure stored code is HMAC, not plaintext
-	stored, err := cache.PeekMobileCode(ctx, "LOGIN", seq, "13800138000", "86")
-	assert.NoError(t, err)
-	if assert.NotNil(t, stored) {
-		assert.NotEqual(t, "666666", stored.Code.Code)
-		assert.Greater(t, len(stored.Code.Code), 6) // hex string
-	}
+		// Ensure stored code is HMAC, not plaintext
+		stored, err := cache.PeekMobileCode(ctx, "LOGIN", seq, "13800138000", "86")
+		assert.NoError(t, err)
+		if assert.NotNil(t, stored) {
+			assert.NotEqual(t, code, stored.Code.Code)
+			assert.Greater(t, len(stored.Code.Code), 4) // hex string
+		}
 
-	// Verify OK should delete
-	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "666666")
-	assert.NoError(t, err)
-	assert.True(t, ok)
-	_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrCodeNotFound))
+		// Verify OK should delete
+		ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrCodeNotFound))
+	}
 }
 
 func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
@@ -142,7 +166,10 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
 
-	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "000000")
+	sent := fake.last.Code.Code
+	bad := wrongCodeFor(sent)
+
+	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 	// should still exist
