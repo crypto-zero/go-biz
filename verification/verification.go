@@ -3,10 +3,15 @@ package verification
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
+	mrand "math/rand"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -40,7 +45,7 @@ type Code struct {
 	Content string
 	// context arguments
 	Args []any
-	// content format function (unexported to avoid gob encoding issues)
+	// content format function
 	Format func(content string, args ...any) string
 }
 
@@ -80,6 +85,12 @@ type CodeGenerator interface {
 	// NewEcdsaCode generates a new ecdsa verification code.
 	NewEcdsaCode(ctx context.Context, typ string, userID int64, chain,
 		address string) (*EcdsaCode, error)
+}
+
+// MobileCodeSender represents a mobile verification code sender.
+type MobileCodeSender interface {
+	// Send the mobile verification code via SMS.
+	Send(ctx context.Context, code *MobileCode) error
 }
 
 // Compile-time assertion: StaticCodeGenerator implements CodeGenerator.
@@ -125,8 +136,9 @@ type CodeCache interface {
 // ============================================================================
 // Generator (static)
 // ============================================================================
-// StaticCodeGenerator represents a static verification code generator.
-type StaticCodeGenerator struct{ useRandom bool }
+
+// StaticCodeGenerator 仅用于固定测试验证码（如 666666）。
+type StaticCodeGenerator struct{}
 
 // NewSequence generates a new sequence.
 func (s StaticCodeGenerator) NewSequence() string {
@@ -138,12 +150,6 @@ func (s StaticCodeGenerator) NewTestCode() (code string, length int32) {
 	return "666666", 6 // nolint // always return 666666 for testing
 }
 
-// NewRandomCode returns a random 4-digit code.
-func (s StaticCodeGenerator) NewRandomCode() (code string, length int32) {
-	n := rand.IntN(10000)
-	return fmt.Sprintf("%04d", n), 4
-}
-
 func (s StaticCodeGenerator) NewMobileCode(_ context.Context,
 	typ string, userID int64, mobile, countryCode string,
 ) (*MobileCode, error) {
@@ -151,13 +157,7 @@ func (s StaticCodeGenerator) NewMobileCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	var code string
-	var codeLength int32
-	if s.useRandom {
-		code, codeLength = s.NewRandomCode()
-	} else {
-		code, codeLength = s.NewTestCode()
-	}
+	code, codeLength := s.NewTestCode()
 	return &MobileCode{
 		Code: Code{
 			UserID:     userID,
@@ -181,13 +181,7 @@ func (s StaticCodeGenerator) NewEmailCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	var code string
-	var codeLength int32
-	if s.useRandom {
-		code, codeLength = s.NewRandomCode()
-	} else {
-		code, codeLength = s.NewTestCode()
-	}
+	code, codeLength := s.NewTestCode()
 	return &EmailCode{
 		Code: Code{
 			UserID:     userID,
@@ -210,13 +204,7 @@ func (s StaticCodeGenerator) NewEcdsaCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	var code string
-	var codeLength int32
-	if s.useRandom {
-		code, codeLength = s.NewRandomCode()
-	} else {
-		code, codeLength = s.NewTestCode()
-	}
+	code, codeLength := s.NewTestCode()
 	code = fmt.Sprintf("%s-%d", code, time.Now().UnixNano())
 	return &EcdsaCode{
 		Code: Code{
@@ -235,42 +223,148 @@ func (s StaticCodeGenerator) NewEcdsaCode(_ context.Context,
 }
 
 // NewStaticCodeGenerator creates a new static verification code generator.
-func NewStaticCodeGenerator() CodeGenerator {
-	return &StaticCodeGenerator{useRandom: false}
+func NewStaticCodeGenerator() CodeGenerator { // fixed 666666 for tests
+	return &StaticCodeGenerator{}
 }
 
-// NewStatic4DigitCodeGenerator creates a generator that returns random 4-digit codes.
-func NewStatic4DigitCodeGenerator() CodeGenerator {
-	return &StaticCodeGenerator{useRandom: true}
+// ============================================================================
+// Random helpers + generator
+// ============================================================================
+
+// RandString 使用默认字符集生成随机字符串（不含 O 的大写字母 + 数字）。
+func RandString(length int) string {
+	const defaultCharset = "ABCDEFGHIJKLMNPQRSTUVWXYZ0123456789"
+	return RandStringWithCharset(length, defaultCharset)
 }
 
-// MockEmailCodeSender represents a mock email verification code sender.
-type MockEmailCodeSender struct{}
+// maxInt64 is the maximum value of int64.
+var maxInt64 = big.NewInt(math.MaxInt64)
 
-func (m MockEmailCodeSender) Send(_ context.Context, _ *EmailCode) error {
-	return nil
+// RandStringWithCharset returns a random string with given length and charset.
+// it uses crypto/rand to generate random string.
+func RandStringWithCharset(length int, charset string) string {
+	var seed int64
+	if err := binary.Read(crand.Reader, binary.BigEndian, &seed); err != nil {
+		seed = mrand.Int63()
+	}
+
+	siz := uint64(len(charset))
+	sizBig := big.NewInt(int64(siz))
+	r := mrand.New(mrand.NewSource(seed))
+
+	b := make([]byte, length)
+	for i := range b {
+		rd := r.Uint64()
+		if rdBig, err := crand.Int(crand.Reader, maxInt64); err == nil {
+			var rs big.Int
+			rs.Mod(rdBig, sizBig)
+			rd = rs.Uint64()
+		}
+		b[i] = charset[rd%siz]
+	}
+	return string(b)
 }
 
-// NewMockEmailCodeSender creates a new mock email verification code sender.
-func NewMockEmailCodeSender() EmailCodeSender {
-	return &MockEmailCodeSender{}
+// RandomCodeGenerator：用于线上随机验证码，长度/字符集可配置。
+type RandomCodeGenerator struct {
+	Length  int
+	Charset string
 }
 
-// EmailCodeSender represents an email verification code sender.
-type EmailCodeSender interface {
-	// Send the email verification code.
-	Send(ctx context.Context, code *EmailCode) error
+// Compile-time assertion: RandomCodeGenerator implements CodeGenerator.
+var _ CodeGenerator = (*RandomCodeGenerator)(nil)
+
+func (g RandomCodeGenerator) newSequence() string {
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int64())
 }
 
-// MobileCodeSender represents a mobile verification code sender.
-type MobileCodeSender interface {
-	// Send the mobile verification code via SMS.
-	Send(ctx context.Context, code *MobileCode) error
+func (g RandomCodeGenerator) codeAndLen() (string, int32) {
+	l := g.Length // 随机生成验证码长度
+	if l <= 0 {
+		l = 4 // 默认设定为4位数
+	}
+	cs := strings.TrimSpace(g.Charset)
+	if cs == "" {
+		cs = "ABCDEFGHIJKLMNPQRSTUVWXYZ0123456789"
+	}
+	return RandStringWithCharset(l, cs), int32(l)
+}
+
+func (g RandomCodeGenerator) NewMobileCode(_ context.Context, typ string, userID int64, mobile, countryCode string) (*MobileCode, error) {
+	if typ == "" {
+		return nil, ErrCodeTypeIsEmpty
+	}
+	seq := g.newSequence()
+	code, codeLen := g.codeAndLen()
+	return &MobileCode{
+		Code: Code{
+			UserID:     userID,
+			Type:       strings.ToUpper(typ),
+			Sequence:   seq,
+			CodeLength: codeLen,
+			Code:       code,
+			Content:    "Your verification code is: %s.",
+			Args:       []any{code},
+			Format:     fmt.Sprintf,
+		},
+		Mobile:      mobile,
+		CountryCode: countryCode,
+	}, nil
+}
+
+func (g RandomCodeGenerator) NewEmailCode(_ context.Context, typ string, userID int64, email string) (*EmailCode, error) {
+	if typ == "" {
+		return nil, ErrCodeTypeIsEmpty
+	}
+	seq := g.newSequence()
+	code, codeLen := g.codeAndLen()
+	return &EmailCode{
+		Code: Code{
+			UserID:     userID,
+			Type:       strings.ToUpper(typ),
+			Sequence:   seq,
+			CodeLength: codeLen,
+			Code:       code,
+			Content:    "Your verification code is: %s.",
+			Args:       []any{code},
+			Format:     fmt.Sprintf,
+		},
+		Email: email,
+	}, nil
+}
+
+func (g RandomCodeGenerator) NewEcdsaCode(_ context.Context, typ string, userID int64, chain, publicKeyHex string) (*EcdsaCode, error) {
+	if typ == "" {
+		return nil, ErrCodeTypeIsEmpty
+	}
+	seq := g.newSequence()
+	code, codeLen := g.codeAndLen()
+	code = fmt.Sprintf("%s-%d", code, time.Now().UnixNano())
+	return &EcdsaCode{
+		Code: Code{
+			UserID:     userID,
+			Type:       strings.ToUpper(typ),
+			Sequence:   seq,
+			CodeLength: codeLen,
+			Code:       code,
+			Content:    "Your verification code is: %s.",
+			Args:       []any{code},
+			Format:     fmt.Sprintf,
+		},
+		Chain:   chain,
+		Address: publicKeyHex,
+	}, nil
+}
+
+// NewRandomCodeGenerator 返回一个随机验证码生成器；charset 为空则使用默认字符集。
+func NewRandomCodeGenerator(length int, charset string) CodeGenerator {
+	return &RandomCodeGenerator{Length: length, Charset: charset}
 }
 
 // ============================================================================
 // Cache (Redis gob serialization)
 // ============================================================================
+
 // CodeCacheImpl is a struct that implements CodeCache interface
 type CodeCacheImpl struct {
 	prefix CodeCacheKeyPrefix
@@ -471,6 +565,7 @@ func (v CodeCacheImpl) DeleteEcdsaCode(ctx context.Context, typ, sequence, chain
 // ============================================================================
 // SMS Sender (Aliyun Dysms)
 // ============================================================================
+
 // AliyunSmsSender implements MobileCodeSender using Alibaba Cloud Dysms API.
 type AliyunSmsSender struct {
 	accessKeyID     string
@@ -537,8 +632,8 @@ func (a *AliyunSmsSender) Send(ctx context.Context, mc *MobileCode) error {
 	if resp == nil || resp.Body == nil {
 		return errors.New("aliyun sms: empty response body")
 	}
-	if code := tea.StringValue(resp.Body.Code); strings.ToUpper(code) != "OK" {
-		return fmt.Errorf("aliyun sms: send not OK: %s", tea.StringValue(resp.Body.Message))
+	if code := tea.StringValue(resp.Body.Code); strings.ToUpper(code) != "ok" {
+		return fmt.Errorf("aliyun sms: send not ok: %s", tea.StringValue(resp.Body.Message))
 	}
 	return nil
 }
@@ -556,25 +651,26 @@ func NewAliyunSmsSender(ak, sk, regionID, signName, templateCode string) *Aliyun
 // ============================================================================
 // Verification Service
 // ============================================================================
+
 // VerificationService encapsulates sending and verifying OTP codes.
 type VerificationService struct {
-	Cache     CodeCache
-	SMSSender MobileCodeSender
-	Generator CodeGenerator
+	cache     CodeCache
+	smssender MobileCodeSender
+	generator CodeGenerator
 	// Policy
-	TTL time.Duration // e.g., 5 * time.Minute
+	ttl time.Duration // e.g., 5 * time.Minute
 }
 
 // SendMobileOTP generates a code, stores it, sends SMS, and returns the sequence.
 func (s *VerificationService) SendMobileOTP(ctx context.Context, typ string, userID int64, mobile, countryCode string) (string, error) {
-	mc, err := s.Generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
+	mc, err := s.generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
 	if err != nil {
 		return "", err
 	}
-	if err := s.Cache.SetMobileCode(ctx, mc, s.TTL); err != nil {
+	if err := s.cache.SetMobileCode(ctx, mc, s.ttl); err != nil {
 		return "", err
 	}
-	if err := s.SMSSender.Send(ctx, mc); err != nil {
+	if err := s.smssender.Send(ctx, mc); err != nil {
 		return "", err
 	}
 	return mc.Sequence, nil
@@ -582,7 +678,7 @@ func (s *VerificationService) SendMobileOTP(ctx context.Context, typ string, use
 
 func (s *VerificationService) VerifyMobileOTP(ctx context.Context, typ, sequence, mobile, countryCode, input string) (bool, error) {
 	// Non-destructive read
-	stored, err := s.Cache.PeekMobileCode(ctx, typ, sequence, mobile, countryCode)
+	stored, err := s.cache.PeekMobileCode(ctx, typ, sequence, mobile, countryCode)
 	if err != nil {
 		return false, err
 	}
@@ -590,7 +686,7 @@ func (s *VerificationService) VerifyMobileOTP(ctx context.Context, typ, sequence
 		return false, nil
 	}
 	// Delete after successful verification (one-time code)
-	if err := s.Cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode); err != nil {
+	if err := s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode); err != nil {
 		return false, err
 	}
 	return true, nil

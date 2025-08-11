@@ -25,6 +25,22 @@ func isNDigits(s string, n int) bool {
 	return true
 }
 
+// wrongCodeFor returns a 4- or 6-digit code that is guaranteed to differ from sent.
+func wrongCodeFor(sent string) string {
+	if len(sent) == 0 {
+		return "0000"
+	}
+	// flip the last digit safely
+	b := []byte(sent)
+	last := b[len(b)-1]
+	if last != '0' {
+		b[len(b)-1] = '0'
+	} else {
+		b[len(b)-1] = '1'
+	}
+	return string(b)
+}
+
 // getRedisClient returns a redis client. If REDIS_ADDR is empty, it spins up a miniredis.
 func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Duration)) {
 	t.Helper()
@@ -41,6 +57,8 @@ func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Dura
 }
 
 // fake sender captures the last MobileCode sent
+// kept unexported as it's used only in tests within this package
+
 type fakeSMSSender struct{ last *MobileCode }
 
 func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
@@ -104,10 +122,10 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
 	svc := &VerificationService{
-		Cache:     cache,
-		SMSSender: fake,
-		Generator: NewStaticCodeGenerator(), // fixed "666666"
-		TTL:       5 * time.Minute,
+		cache:     cache,
+		smssender: fake,
+		generator: NewStaticCodeGenerator(), // fixed "666666"
+		ttl:       5 * time.Minute,
 	}
 
 	// Send
@@ -138,10 +156,10 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
 	svc := &VerificationService{
-		Cache:     cache,
-		SMSSender: fake,
-		Generator: NewStatic4DigitCodeGenerator(), // random 4-digit
-		TTL:       5 * time.Minute,
+		cache:     cache,
+		smssender: fake,
+		generator: NewRandomCodeGenerator(4, "0123456789"), // random 4-digit
+		ttl:       5 * time.Minute,
 	}
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -170,10 +188,10 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
 	svc := &VerificationService{
-		Cache:     cache,
-		SMSSender: fake,
-		Generator: NewStatic4DigitCodeGenerator(),
-		TTL:       5 * time.Minute,
+		cache:     cache,
+		smssender: fake,
+		generator: NewRandomCodeGenerator(4, "0123456789"),
+		ttl:       5 * time.Minute,
 	}
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -183,7 +201,8 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	sent := fake.last.Code.Code
 	assert.True(t, isNDigits(sent, 4), "code should be 4 digits, got: %q", sent)
 
-	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "1234")
+	bad := wrongCodeFor(sent)
+	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 	// should still exist
