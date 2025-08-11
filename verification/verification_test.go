@@ -56,9 +56,7 @@ func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Dura
 	return c, func() { _ = c.Close(); m.Close() }, m.FastForward
 }
 
-// fake sender captures the last MobileCode sent
-// kept unexported as it's used only in tests within this package
-
+// fake sender captures the last MobileCode sent (package-private for tests).
 type fakeSMSSender struct{ last *MobileCode }
 
 func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
@@ -72,7 +70,7 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 	defer cleanup()
 
 	generator := DefaultCodeGenerator // fixed "666666"
-	cache := NewCodeCacheImpl("TEST", client)
+	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 
 	t.Run("email set/get", func(t *testing.T) {
 		typ := "TEST_TYPE"
@@ -119,14 +117,9 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
+	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
-	svc := &VerificationService{
-		cache:     cache,
-		smssender: fake,
-		generator: DefaultCodeGenerator, // fixed "666666"
-		ttl:       5 * time.Minute,
-	}
+	svc := NewDefaultService(cache, fake, 5*time.Minute)
 
 	// Send
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -153,14 +146,9 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
+	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
-	svc := &VerificationService{
-		cache:     cache,
-		smssender: fake,
-		generator: FourDigitCodeGenerator, // random 4-digit
-		ttl:       5 * time.Minute,
-	}
+	svc := NewRandomCodeService(cache, fake, 5*time.Minute)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -185,14 +173,9 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
+	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
-	svc := &VerificationService{
-		cache:     cache,
-		smssender: fake,
-		generator: FourDigitCodeGenerator, // random 4-digit
-		ttl:       5 * time.Minute,
-	}
+	svc := NewRandomCodeService(cache, fake, 5*time.Minute)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
