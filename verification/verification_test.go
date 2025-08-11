@@ -25,14 +25,6 @@ func isNDigits(s string, n int) bool {
 	return true
 }
 
-// wrongCodeFor returns a 4-digit code that differs from sent.
-func wrongCodeFor(sent string) string {
-	if sent != "0000" {
-		return "0000"
-	}
-	return "0001"
-}
-
 // getRedisClient returns a redis client. If REDIS_ADDR is empty, it spins up a miniredis.
 func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Duration)) {
 	t.Helper()
@@ -51,7 +43,7 @@ func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Dura
 // fake sender captures the last MobileCode sent
 type fakeSMSSender struct{ last *MobileCode }
 
-func (f *fakeSMSSender) Send(ctx context.Context, mc *MobileCode) error {
+func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
 	f.last = mc
 	return nil
 }
@@ -61,7 +53,7 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 	client, cleanup, ff := getRedisClient(t)
 	defer cleanup()
 
-	generator := NewStaticCodeGenerator()
+	generator := NewStaticCodeGenerator() // fixed "666666"
 	cache := NewCodeCacheImpl("TEST", client)
 
 	t.Run("email set/get", func(t *testing.T) {
@@ -73,6 +65,7 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, emailCode)
 		assert.Equal(t, code.Content, emailCode.Content)
+		assert.Equal(t, "666666", emailCode.Code.Code) // fixed generator
 	})
 
 	t.Run("email expired", func(t *testing.T) {
@@ -84,16 +77,17 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 	})
 
 	t.Run("mobile set/get", func(t *testing.T) {
-		code, _ := generator.NewMobileCode(ctx, "TEST_TYPE", 1, "13566667777", "CN")
+		code, _ := generator.NewMobileCode(ctx, "TEST_TYPE", 1, "13566667777", "86")
 		_ = cache.SetMobileCode(ctx, code, time.Minute)
 		mobileCode, err := cache.GetMobileCode(ctx, "TEST_TYPE", code.Sequence, code.Mobile, code.CountryCode)
 		assert.NoError(t, err)
 		assert.NotNil(t, mobileCode)
 		assert.Equal(t, code.Content, mobileCode.Content)
+		assert.Equal(t, "666666", mobileCode.Code.Code) // fixed generator
 	})
 
 	t.Run("ecdsa set/get", func(t *testing.T) {
-		code, _ := generator.NewEcdsaCode(ctx, "TEST_TYPE", 1, "ETHEREUM", "12345")
+		code, _ := generator.NewEcdsaCode(ctx, "TEST_TYPE", 1, "ETHEREUM", "0xabc")
 		_ = cache.SetEcdsaCode(ctx, code, time.Minute)
 		ecdsaCode, err := cache.GetEcdsaCode(ctx, "TEST_TYPE", code.Sequence, code.Chain, code.Address)
 		assert.NoError(t, err)
@@ -102,7 +96,7 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 	})
 }
 
-func TestVerification_Service_SendAndVerify(t *testing.T) {
+func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	ctx := context.Background()
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
@@ -112,9 +106,8 @@ func TestVerification_Service_SendAndVerify(t *testing.T) {
 	svc := &VerificationService{
 		Cache:     cache,
 		SMSSender: fake,
-		Generator: NewStaticCodeGenerator(), // returns random 4-digit code
+		Generator: NewStaticCodeGenerator(), // fixed "666666"
 		TTL:       5 * time.Minute,
-		Secret:    []byte("test-secret-32-bytes-minimum-abcdefgh"),
 	}
 
 	// Send
@@ -122,20 +115,42 @@ func TestVerification_Service_SendAndVerify(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
 	if assert.NotNil(t, fake.last) {
-		// plaintext sent out must be 4 numeric digits
-		assert.True(t, isNDigits(fake.last.Code.Code, 4), "code should be 4 digits, got: %q", fake.last.Code.Code)
-		code := fake.last.Code.Code
-
 		assert.Equal(t, "13800138000", fake.last.Mobile)
 		assert.Equal(t, "86", fake.last.CountryCode)
+		assert.True(t, isNDigits(fake.last.Code.Code, 6))
+		assert.Equal(t, "666666", fake.last.Code.Code)
 
-		// Ensure stored code is HMAC, not plaintext
-		stored, err := cache.PeekMobileCode(ctx, "LOGIN", seq, "13800138000", "86")
+		// Verify OK should delete
+		ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "666666")
 		assert.NoError(t, err)
-		if assert.NotNil(t, stored) {
-			assert.NotEqual(t, code, stored.Code.Code)
-			assert.Greater(t, len(stored.Code.Code), 4) // hex string
-		}
+		assert.True(t, ok)
+		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrCodeNotFound))
+	}
+}
+
+func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	fake := &fakeSMSSender{}
+	svc := &VerificationService{
+		Cache:     cache,
+		SMSSender: fake,
+		Generator: NewStatic4DigitCodeGenerator(), // random 4-digit
+		TTL:       5 * time.Minute,
+	}
+
+	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq)
+
+	if assert.NotNil(t, fake.last) {
+		code := fake.last.Code.Code
+		assert.True(t, isNDigits(code, 4), "code should be 4 digits, got: %q", code)
 
 		// Verify OK should delete
 		ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
@@ -157,9 +172,8 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	svc := &VerificationService{
 		Cache:     cache,
 		SMSSender: fake,
-		Generator: NewStaticCodeGenerator(),
+		Generator: NewStatic4DigitCodeGenerator(),
 		TTL:       5 * time.Minute,
-		Secret:    []byte("test-secret-32-bytes-minimum-abcdefgh"),
 	}
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -167,9 +181,9 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	assert.NotEmpty(t, seq)
 
 	sent := fake.last.Code.Code
-	bad := wrongCodeFor(sent)
+	assert.True(t, isNDigits(sent, 4), "code should be 4 digits, got: %q", sent)
 
-	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
+	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "1234")
 	assert.NoError(t, err)
 	assert.False(t, ok)
 	// should still exist

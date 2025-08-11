@@ -3,11 +3,7 @@ package verification
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/gob"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +41,7 @@ type Code struct {
 	// context arguments
 	Args []any
 	// content format function (unexported to avoid gob encoding issues)
-	format func(content string, args ...any) string
+	Format func(content string, args ...any) string
 }
 
 // MobileCode represents a mobile verification code.
@@ -86,6 +82,9 @@ type CodeGenerator interface {
 		address string) (*EcdsaCode, error)
 }
 
+// Compile-time assertion: StaticCodeGenerator implements CodeGenerator.
+var _ CodeGenerator = (*StaticCodeGenerator)(nil)
+
 // CodeCacheKeyPrefix represents a verification code cache key prefix.
 type CodeCacheKeyPrefix string
 
@@ -123,108 +122,24 @@ type CodeCache interface {
 	DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error
 }
 
-// PeekMobileCode gets the mobile verification code without deleting it.
-func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (*MobileCode, error) {
-	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
-	data, err := v.client.Get(ctx, key).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, ErrCodeNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to peek mobile verification code: %w", err)
-	}
-	var code MobileCode
-	decode := gob.NewDecoder(bytes.NewReader(data))
-	if err = decode.Decode(&code); err != nil {
-		return nil, fmt.Errorf("failed to decode mobile verification code: %w", err)
-	}
-	return &code, nil
-}
-
-// DeleteMobileCode deletes the stored mobile verification code.
-func (v CodeCacheImpl) DeleteMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) error {
-	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
-	if err := v.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("failed to delete mobile verification code: %w", err)
-	}
-	return nil
-}
-
-// PeekEmailCode gets the email verification code without deleting it.
-func (v CodeCacheImpl) PeekEmailCode(ctx context.Context, typ, sequence, email string) (*EmailCode, error) {
-	key := v.EmailCodeKey(typ, sequence, email)
-	data, err := v.client.Get(ctx, key).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, ErrCodeNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to peek email verification code: %w", err)
-	}
-	var code EmailCode
-	decode := gob.NewDecoder(bytes.NewReader(data))
-	if err = decode.Decode(&code); err != nil {
-		return nil, fmt.Errorf("failed to decode email verification code: %w", err)
-	}
-	return &code, nil
-}
-
-// DeleteEmailCode deletes the stored email verification code.
-func (v CodeCacheImpl) DeleteEmailCode(ctx context.Context, typ, sequence, email string) error {
-	key := v.EmailCodeKey(typ, sequence, email)
-	if err := v.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("failed to delete email verification code: %w", err)
-	}
-	return nil
-}
-
-// PeekEcdsaCode gets the ecdsa verification code without deleting it.
-func (v CodeCacheImpl) PeekEcdsaCode(ctx context.Context, typ, sequence, chain, address string) (*EcdsaCode, error) {
-	key := v.EcdsaCodeKey(typ, sequence, chain, address)
-	data, err := v.client.Get(ctx, key).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, ErrCodeNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to peek ecdsa verification code: %w", err)
-	}
-	var code EcdsaCode
-	decode := gob.NewDecoder(bytes.NewReader(data))
-	if err = decode.Decode(&code); err != nil {
-		return nil, fmt.Errorf("failed to decode ecdsa verification code: %w", err)
-	}
-	return &code, nil
-}
-
-// DeleteEcdsaCode deletes the stored ecdsa verification code.
-func (v CodeCacheImpl) DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error {
-	key := v.EcdsaCodeKey(typ, sequence, chain, address)
-	if err := v.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("failed to delete ecdsa verification code: %w", err)
-	}
-	return nil
-}
-
-// EmailCodeSender represents an email verification code sender.
-type EmailCodeSender interface {
-	// Send the email verification code.
-	Send(ctx context.Context, code *EmailCode) error
-}
-
-// MobileCodeSender represents a mobile verification code sender.
-type MobileCodeSender interface {
-	// Send the mobile verification code via SMS.
-	Send(ctx context.Context, code *MobileCode) error
-}
-
+// ============================================================================
+// Generator (static)
+// ============================================================================
 // StaticCodeGenerator represents a static verification code generator.
-type StaticCodeGenerator struct{}
+type StaticCodeGenerator struct{ useRandom bool }
 
+// NewSequence generates a new sequence.
 func (s StaticCodeGenerator) NewSequence() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int64())
 }
 
-func (s StaticCodeGenerator) NewCode() (code string, length int32) {
-	// Return a random 4-digit code, zero-padded
+// NewTestCode returns a fixed code for testing.
+func (s StaticCodeGenerator) NewTestCode() (code string, length int32) {
+	return "666666", 6 // nolint // always return 666666 for testing
+}
+
+// NewRandomCode returns a random 4-digit code.
+func (s StaticCodeGenerator) NewRandomCode() (code string, length int32) {
 	n := rand.IntN(10000)
 	return fmt.Sprintf("%04d", n), 4
 }
@@ -236,7 +151,13 @@ func (s StaticCodeGenerator) NewMobileCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	code, codeLength := s.NewCode()
+	var code string
+	var codeLength int32
+	if s.useRandom {
+		code, codeLength = s.NewRandomCode()
+	} else {
+		code, codeLength = s.NewTestCode()
+	}
 	return &MobileCode{
 		Code: Code{
 			UserID:     userID,
@@ -246,7 +167,7 @@ func (s StaticCodeGenerator) NewMobileCode(_ context.Context,
 			Code:       code,
 			Content:    "Your verification code is: %s.",
 			Args:       []any{code},
-			format:     fmt.Sprintf,
+			Format:     fmt.Sprintf,
 		},
 		Mobile:      mobile,
 		CountryCode: countryCode,
@@ -260,7 +181,13 @@ func (s StaticCodeGenerator) NewEmailCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	code, codeLength := s.NewCode()
+	var code string
+	var codeLength int32
+	if s.useRandom {
+		code, codeLength = s.NewRandomCode()
+	} else {
+		code, codeLength = s.NewTestCode()
+	}
 	return &EmailCode{
 		Code: Code{
 			UserID:     userID,
@@ -270,7 +197,7 @@ func (s StaticCodeGenerator) NewEmailCode(_ context.Context,
 			Code:       code,
 			Content:    "Your verification code is: %s.",
 			Args:       []any{code},
-			format:     fmt.Sprintf,
+			Format:     fmt.Sprintf,
 		},
 		Email: email,
 	}, nil
@@ -283,7 +210,13 @@ func (s StaticCodeGenerator) NewEcdsaCode(_ context.Context,
 		return nil, ErrCodeTypeIsEmpty
 	}
 	sequence := s.NewSequence()
-	code, codeLength := s.NewCode()
+	var code string
+	var codeLength int32
+	if s.useRandom {
+		code, codeLength = s.NewRandomCode()
+	} else {
+		code, codeLength = s.NewTestCode()
+	}
 	code = fmt.Sprintf("%s-%d", code, time.Now().UnixNano())
 	return &EcdsaCode{
 		Code: Code{
@@ -294,7 +227,7 @@ func (s StaticCodeGenerator) NewEcdsaCode(_ context.Context,
 			Code:       code,
 			Content:    "Your verification code is: %s.",
 			Args:       []any{code},
-			format:     fmt.Sprintf,
+			Format:     fmt.Sprintf,
 		},
 		Chain:   chain,
 		Address: publicKeyHex,
@@ -303,7 +236,12 @@ func (s StaticCodeGenerator) NewEcdsaCode(_ context.Context,
 
 // NewStaticCodeGenerator creates a new static verification code generator.
 func NewStaticCodeGenerator() CodeGenerator {
-	return &StaticCodeGenerator{}
+	return &StaticCodeGenerator{useRandom: false}
+}
+
+// NewStatic4DigitCodeGenerator creates a generator that returns random 4-digit codes.
+func NewStatic4DigitCodeGenerator() CodeGenerator {
+	return &StaticCodeGenerator{useRandom: true}
 }
 
 // MockEmailCodeSender represents a mock email verification code sender.
@@ -318,11 +256,29 @@ func NewMockEmailCodeSender() EmailCodeSender {
 	return &MockEmailCodeSender{}
 }
 
+// EmailCodeSender represents an email verification code sender.
+type EmailCodeSender interface {
+	// Send the email verification code.
+	Send(ctx context.Context, code *EmailCode) error
+}
+
+// MobileCodeSender represents a mobile verification code sender.
+type MobileCodeSender interface {
+	// Send the mobile verification code via SMS.
+	Send(ctx context.Context, code *MobileCode) error
+}
+
+// ============================================================================
+// Cache (Redis gob serialization)
+// ============================================================================
 // CodeCacheImpl is a struct that implements CodeCache interface
 type CodeCacheImpl struct {
 	prefix CodeCacheKeyPrefix
 	client redis.UniversalClient
 }
+
+// Compile-time assertion: CodeCacheImpl implements CodeCache.
+var _ CodeCache = (*CodeCacheImpl)(nil)
 
 func (v CodeCacheImpl) MobileCodeKey(typ, sequence, mobile, countryCode string) string {
 	typ = strings.ToUpper(typ)
@@ -437,21 +393,102 @@ func (v CodeCacheImpl) GetEcdsaCode(ctx context.Context, typ, sequence, chain, a
 	return &code, nil
 }
 
+func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (*MobileCode, error) {
+	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
+	data, err := v.client.Get(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, ErrCodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek mobile verification code: %w", err)
+	}
+	var code MobileCode
+	decode := gob.NewDecoder(bytes.NewReader(data))
+	if err = decode.Decode(&code); err != nil {
+		return nil, fmt.Errorf("failed to decode mobile verification code: %w", err)
+	}
+	return &code, nil
+}
+
+func (v CodeCacheImpl) DeleteMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) error {
+	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
+	if err := v.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("failed to delete mobile verification code: %w", err)
+	}
+	return nil
+}
+
+func (v CodeCacheImpl) PeekEmailCode(ctx context.Context, typ, sequence, email string) (*EmailCode, error) {
+	key := v.EmailCodeKey(typ, sequence, email)
+	data, err := v.client.Get(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, ErrCodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek email verification code: %w", err)
+	}
+	var code EmailCode
+	decode := gob.NewDecoder(bytes.NewReader(data))
+	if err = decode.Decode(&code); err != nil {
+		return nil, fmt.Errorf("failed to decode email verification code: %w", err)
+	}
+	return &code, nil
+}
+
+func (v CodeCacheImpl) DeleteEmailCode(ctx context.Context, typ, sequence, email string) error {
+	key := v.EmailCodeKey(typ, sequence, email)
+	if err := v.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("failed to delete email verification code: %w", err)
+	}
+	return nil
+}
+
+func (v CodeCacheImpl) PeekEcdsaCode(ctx context.Context, typ, sequence, chain, address string) (*EcdsaCode, error) {
+	key := v.EcdsaCodeKey(typ, sequence, chain, address)
+	data, err := v.client.Get(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, ErrCodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek ecdsa verification code: %w", err)
+	}
+	var code EcdsaCode
+	decode := gob.NewDecoder(bytes.NewReader(data))
+	if err = decode.Decode(&code); err != nil {
+		return nil, fmt.Errorf("failed to decode ecdsa verification code: %w", err)
+	}
+	return &code, nil
+}
+
+func (v CodeCacheImpl) DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error {
+	key := v.EcdsaCodeKey(typ, sequence, chain, address)
+	if err := v.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("failed to delete ecdsa verification code: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// SMS Sender (Aliyun Dysms)
+// ============================================================================
 // AliyunSmsSender implements MobileCodeSender using Alibaba Cloud Dysms API.
 type AliyunSmsSender struct {
-	AccessKeyId     string
-	AccessKeySecret string
-	RegionId        string
-	SignName        string
-	TemplateCode    string
+	accessKeyID     string
+	accessKeySecret string
+	regionID        string
+	signName        string
+	templateCode    string
 }
+
+// Compile-time assertion: AliyunSmsSender implements MobileCodeSender.
+var _ MobileCodeSender = (*AliyunSmsSender)(nil)
 
 // newClient builds a Dysms client with the configured credentials.
 func (a *AliyunSmsSender) newClient() (*dysms.Client, error) {
 	cfg := &openapi.Config{
-		AccessKeyId:     tea.String(a.AccessKeyId),
-		AccessKeySecret: tea.String(a.AccessKeySecret),
-		RegionId:        tea.String(a.RegionId),
+		AccessKeyId:     tea.String(a.accessKeyID),
+		AccessKeySecret: tea.String(a.accessKeySecret),
+		RegionId:        tea.String(a.regionID),
 	}
 	cfg.Endpoint = tea.String("dysmsapi.aliyuncs.com")
 	return dysms.NewClient(cfg)
@@ -476,7 +513,7 @@ func (a *AliyunSmsSender) Send(ctx context.Context, mc *MobileCode) error {
 		return fmt.Errorf("aliyun sms: create client: %w", err)
 	}
 
-	// Build template params. Most templates use a variable named "code".
+	// Build template params.
 	payload := map[string]string{
 		"code": mc.Code.Code,
 	}
@@ -487,8 +524,8 @@ func (a *AliyunSmsSender) Send(ctx context.Context, mc *MobileCode) error {
 
 	req := &dysms.SendSmsRequest{
 		PhoneNumbers:  tea.String(formatAliyunPhone(mc.Mobile, mc.CountryCode)),
-		SignName:      tea.String(a.SignName),
-		TemplateCode:  tea.String(a.TemplateCode),
+		SignName:      tea.String(a.signName),
+		TemplateCode:  tea.String(a.templateCode),
 		TemplateParam: tea.String(string(b)),
 		OutId:         tea.String(mc.Sequence), // helpful for tracing/idempotency on our side
 	}
@@ -501,96 +538,59 @@ func (a *AliyunSmsSender) Send(ctx context.Context, mc *MobileCode) error {
 		return errors.New("aliyun sms: empty response body")
 	}
 	if code := tea.StringValue(resp.Body.Code); strings.ToUpper(code) != "OK" {
-		return fmt.Errorf("aliyun sms: send not OK: code=%s, msg=%s, requestId=%s, bizId=%s", tea.StringValue(resp.Body.Code), tea.StringValue(resp.Body.Message), tea.StringValue(resp.Body.RequestId), tea.StringValue(resp.Body.BizId))
+		return fmt.Errorf("aliyun sms: send not OK: %s", tea.StringValue(resp.Body.Message))
 	}
 	return nil
 }
 
-func NewAliyunSmsSender(ak, sk, regionId, signName, templateCode string) *AliyunSmsSender {
+func NewAliyunSmsSender(ak, sk, regionID, signName, templateCode string) *AliyunSmsSender {
 	return &AliyunSmsSender{
-		AccessKeyId:     ak,
-		AccessKeySecret: sk,
-		RegionId:        regionId,
-		SignName:        signName,
-		TemplateCode:    templateCode,
+		accessKeyID:     ak,
+		accessKeySecret: sk,
+		regionID:        regionID,
+		signName:        signName,
+		templateCode:    templateCode,
 	}
 }
 
-// secure HMAC-SHA256 of code using a server secret; returns lowercase hex string
-func hmacSHA256Hex(secret []byte, code string) string {
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(code))
-	sum := mac.Sum(nil)
-	return hex.EncodeToString(sum)
-}
-
-// constant-time equality check for two hex strings
-func constantEqualHex(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
+// ============================================================================
+// Verification Service
+// ============================================================================
 // VerificationService encapsulates sending and verifying OTP codes.
 type VerificationService struct {
 	Cache     CodeCache
 	SMSSender MobileCodeSender
 	Generator CodeGenerator
 	// Policy
-	TTL    time.Duration // e.g., 5 * time.Minute
-	Secret []byte        // HMAC secret for hashing codes at rest
+	TTL time.Duration // e.g., 5 * time.Minute
 }
 
-// SendMobileOTP generates a code, stores only its HMAC hash, sends SMS, and returns the sequence.
-func (s *VerificationService) SendMobileOTP(ctx context.Context, typ string, userID int64, mobile, country string) (string, error) {
-	if s.Cache == nil || s.SMSSender == nil || s.Generator == nil {
-		return "", errors.New("verification service not initialized")
-	}
-	mc, err := s.Generator.NewMobileCode(ctx, typ, userID, mobile, country)
+// SendMobileOTP generates a code, stores it, sends SMS, and returns the sequence.
+func (s *VerificationService) SendMobileOTP(ctx context.Context, typ string, userID int64, mobile, countryCode string) (string, error) {
+	mc, err := s.Generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
 	if err != nil {
 		return "", err
-	}
-	// Keep the plaintext for SMS, but store HMAC in cache
-	plain := mc.Code.Code
-	if len(s.Secret) > 0 {
-		mc.Code.Code = hmacSHA256Hex(s.Secret, mc.Code.Code)
 	}
 	if err := s.Cache.SetMobileCode(ctx, mc, s.TTL); err != nil {
 		return "", err
 	}
-	// Restore plaintext for sending
-	mc.Code.Code = plain
 	if err := s.SMSSender.Send(ctx, mc); err != nil {
 		return "", err
 	}
 	return mc.Sequence, nil
 }
 
-func (s *VerificationService) VerifyMobileOTP(ctx context.Context, typ, sequence, mobile, country, input string) (bool, error) {
-	if s.Cache == nil || s.Generator == nil {
-		return false, errors.New("verification service not initialized")
-	}
+func (s *VerificationService) VerifyMobileOTP(ctx context.Context, typ, sequence, mobile, countryCode, input string) (bool, error) {
 	// Non-destructive read
-	stored, err := s.Cache.PeekMobileCode(ctx, typ, sequence, mobile, country)
+	stored, err := s.Cache.PeekMobileCode(ctx, typ, sequence, mobile, countryCode)
 	if err != nil {
 		return false, err
 	}
-	var storedHex string
-	if len(s.Secret) > 0 {
-		storedHex = stored.Code.Code
-		inputHex := hmacSHA256Hex(s.Secret, input)
-		if !constantEqualHex(storedHex, inputHex) {
-			return false, nil
-		}
-	} else {
-		// Fallback: direct compare (still constant-time)
-		if len(stored.Code.Code) != len(input) || subtle.ConstantTimeCompare([]byte(stored.Code.Code), []byte(input)) != 1 {
-			return false, nil
-		}
+	if stored.Code.Code != input {
+		return false, nil
 	}
 	// Delete after successful verification (one-time code)
-	if err := s.Cache.DeleteMobileCode(ctx, typ, sequence, mobile, country); err != nil {
+	if err := s.Cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode); err != nil {
 		return false, err
 	}
 	return true, nil
