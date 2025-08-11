@@ -71,7 +71,7 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 	client, cleanup, ff := getRedisClient(t)
 	defer cleanup()
 
-	generator := NewStaticCodeGenerator() // fixed "666666"
+	generator := DefaultCodeGenerator // fixed "666666"
 	cache := NewCodeCacheImpl("TEST", client)
 
 	t.Run("email set/get", func(t *testing.T) {
@@ -124,7 +124,7 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	svc := &VerificationService{
 		cache:     cache,
 		smssender: fake,
-		generator: NewStaticCodeGenerator(), // fixed "666666"
+		generator: DefaultCodeGenerator, // fixed "666666"
 		ttl:       5 * time.Minute,
 	}
 
@@ -158,7 +158,7 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 	svc := &VerificationService{
 		cache:     cache,
 		smssender: fake,
-		generator: NewRandomCodeGenerator(4, "0123456789"), // random 4-digit
+		generator: FourDigitCodeGenerator, // random 4-digit
 		ttl:       5 * time.Minute,
 	}
 
@@ -190,7 +190,7 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	svc := &VerificationService{
 		cache:     cache,
 		smssender: fake,
-		generator: NewRandomCodeGenerator(4, "0123456789"),
+		generator: FourDigitCodeGenerator, // random 4-digit
 		ttl:       5 * time.Minute,
 	}
 
