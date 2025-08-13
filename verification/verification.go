@@ -91,7 +91,6 @@ type MobileCodeSender interface {
 
 // Compile-time assertions: generators implement CodeGenerator.
 var _ CodeGenerator = (*defaultCodeGenerator)(nil)
-var _ CodeGenerator = (*numericCodeGenerator)(nil)
 
 // CodeCacheKeyPrefix represents a verification code cache key prefix.
 type CodeCacheKeyPrefix string
@@ -134,44 +133,74 @@ type CodeCache interface {
 // Generators and factory
 // ============================================================================
 
-// FactoryCodeGenerator defines low-level primitives for generating sequences
+// CodeFactory defines low-level primitives for generating sequences
 // and codes. Format code can swap factories to change code format/length.
 //
-//   - NewTestCode is a fixed code used for testing (default: "666666").
-//   - NewNumericCode(n) returns an n-digit numeric code.
 //	 - NewSequence generates a new unique sequence id for the code.
+//	 - NewCode generates a new code.
 
-type FactoryCodeGenerator interface {
+type CodeFactory interface {
 	// NewSequence generates a new unique sequence id for the code.
 	NewSequence() string
-	// NewTestCode returns a fixed test code and its length.
-	NewTestCode() (string, int32)
-	// NewNumericCode returns an n-digit numeric code and its length.
-	NewNumericCode(n int) (string, int32)
+	// NewCode generates a new numeric code.
+	NewCode() (string, int32)
 }
 
-// basicFactory is the default factory implementation.
+var (
+	_ CodeFactory = (*basicCodeFactory)(nil)
+	_ CodeFactory = (*defaultNumberCodeFactory)(nil)
+	_ CodeFactory = (*staticCodeFactory)(nil)
+)
+
+// basicCodeFactory is the default factory implementation.
 // It provides the standard sequence and code strategies.
 // Sequence uses time + rand; numeric code uses go-kit text helper.
-type basicFactory struct{}
+type basicCodeFactory struct{}
 
-func (basicFactory) NewSequence() string {
+func (basicCodeFactory) NewSequence() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int64())
 }
 
-func (basicFactory) NewTestCode() (string, int32) { return "666666", 6 }
-
-func (basicFactory) NewNumericCode(n int) (string, int32) {
+func (basicCodeFactory) NewNumericCode(n int) (string, int32) {
 	if n <= 0 {
 		n = 4
 	}
 	return text.RandStringWithCharset(n, "0123456789"), int32(n)
 }
 
+func (b basicCodeFactory) NewCode() (string, int32) {
+	return b.NewNumericCode(6) // default 6-digit code
+}
+
+type defaultNumberCodeFactory struct {
+	basicCodeFactory
+	size int // code size, e.g., 4 or 6
+}
+
+func (f defaultNumberCodeFactory) NewCode() (string, int32) {
+	return f.NewNumericCode(f.size)
+}
+
+// NewDefaultNumberCodeFactory returns a CodeFactory that generates numeric codes
+// of a specified length (default 6 digits).
+func NewDefaultNumberCodeFactory(size int) CodeFactory {
+	return defaultNumberCodeFactory{size: size}
+}
+
+// staticCodeFactory is a factory that always returns the same code.
+type staticCodeFactory struct {
+	basicCodeFactory
+}
+
+// NewCode implements CodeFactory interface.
+func (staticCodeFactory) NewCode() (string, int32) {
+	return "666666", 6 // fixed code for testing
+}
+
 // defaultCodeGenerator uses the factory test code (fixed 666666).
 // It implements CodeGenerator.
 
-type defaultCodeGenerator struct{ f FactoryCodeGenerator }
+type defaultCodeGenerator struct{ CodeFactory }
 
 var _ CodeGenerator = (*defaultCodeGenerator)(nil)
 
@@ -181,8 +210,8 @@ func (g *defaultCodeGenerator) NewMobileCode(_ context.Context,
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
 	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewTestCode()
+	seq := g.NewSequence()
+	code, clen := g.NewCode()
 	return &MobileCode{
 		Code: Code{
 			UserID:     userID,
@@ -205,8 +234,8 @@ func (g *defaultCodeGenerator) NewEmailCode(_ context.Context,
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
 	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewTestCode()
+	seq := g.NewSequence()
+	code, clen := g.NewCode()
 	return &EmailCode{
 		Code: Code{
 			UserID:     userID,
@@ -228,90 +257,8 @@ func (g *defaultCodeGenerator) NewEcdsaCode(_ context.Context,
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
 	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewTestCode()
-	code = fmt.Sprintf("%s-%d", code, time.Now().UnixNano())
-	return &EcdsaCode{
-		Code: Code{
-			UserID:     userID,
-			Type:       strings.ToUpper(typ),
-			Sequence:   seq,
-			CodeLength: clen,
-			Code:       code,
-			Content:    "Your verification code is: %s.",
-			Args:       []any{code},
-			Format:     fmt.Sprintf,
-		},
-		Chain:   chain,
-		Address: publicKeyHex,
-	}, nil
-}
-
-// numericCodeGenerator uses the factory numeric code of a specified length.
-// It implements CodeGenerator.
-
-type numericCodeGenerator struct {
-	f FactoryCodeGenerator
-	n int
-}
-
-var _ CodeGenerator = (*numericCodeGenerator)(nil)
-
-func (g *numericCodeGenerator) NewMobileCode(_ context.Context,
-	typ string, userID int64, mobile, countryCode string,
-) (*MobileCode, error) {
-	if typ == "" {
-		return nil, ErrCodeTypeIsEmpty
-	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewNumericCode(g.n)
-	return &MobileCode{
-		Code: Code{
-			UserID:     userID,
-			Type:       strings.ToUpper(typ),
-			Sequence:   seq,
-			CodeLength: clen,
-			Code:       code,
-			Content:    "Your verification code is: %s.",
-			Args:       []any{code},
-			Format:     fmt.Sprintf,
-		},
-		Mobile:      mobile,
-		CountryCode: countryCode,
-	}, nil
-}
-
-func (g *numericCodeGenerator) NewEmailCode(_ context.Context,
-	typ string, userID int64, email string,
-) (*EmailCode, error) {
-	if typ == "" {
-		return nil, ErrCodeTypeIsEmpty
-	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewNumericCode(g.n)
-	return &EmailCode{
-		Code: Code{
-			UserID:     userID,
-			Type:       strings.ToUpper(typ),
-			Sequence:   seq,
-			CodeLength: clen,
-			Code:       code,
-			Content:    "Your verification code is: %s.",
-			Args:       []any{code},
-			Format:     fmt.Sprintf,
-		},
-		Email: email,
-	}, nil
-}
-
-func (g *numericCodeGenerator) NewEcdsaCode(_ context.Context,
-	typ string, userID int64, chain, publicKeyHex string,
-) (*EcdsaCode, error) {
-	if typ == "" {
-		return nil, ErrCodeTypeIsEmpty
-	}
-	seq := g.f.NewSequence()
-	code, clen := g.f.NewNumericCode(g.n)
+	seq := g.NewSequence()
+	code, clen := g.NewCode()
 	code = fmt.Sprintf("%s-%d", code, time.Now().UnixNano())
 	return &EcdsaCode{
 		Code: Code{
@@ -330,10 +277,10 @@ func (g *numericCodeGenerator) NewEcdsaCode(_ context.Context,
 }
 
 // DefaultCodeGenerator returns the fixed test code ("666666").
-var DefaultCodeGenerator CodeGenerator = &defaultCodeGenerator{f: basicFactory{}}
+var DefaultCodeGenerator CodeGenerator = &defaultCodeGenerator{CodeFactory: staticCodeFactory{}}
 
 // FourDigitCodeGenerator returns random 4-digit numeric codes.
-var FourDigitCodeGenerator CodeGenerator = &numericCodeGenerator{f: basicFactory{}, n: 4} // 4-digit codes
+var FourDigitCodeGenerator CodeGenerator = &defaultCodeGenerator{CodeFactory: NewDefaultNumberCodeFactory(4)}
 
 // ============================================================================
 // Cache (Redis gob serialization)
