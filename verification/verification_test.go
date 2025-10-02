@@ -119,7 +119,7 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
-	svc := NewDefaultService(cache, fake, 5*time.Minute)
+	svc := NewStaticOTPService(cache, fake, 5*time.Minute)
 
 	// Send
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -148,7 +148,7 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 
 	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
-	svc := NewRandomCodeService(cache, fake, 5*time.Minute)
+	svc := NewFourDigitOPTService(cache, fake, 5*time.Minute)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -175,7 +175,7 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
-	svc := NewRandomCodeService(cache, fake, 5*time.Minute)
+	svc := NewFourDigitOPTService(cache, fake, 5*time.Minute)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
