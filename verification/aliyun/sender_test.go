@@ -78,7 +78,7 @@ func TestAliyunSMS_SendMessageWithTemplate_CN(t *testing.T) {
 			ParamsFormat: `{"code":"%s"}`,
 		},
 	})
-	mobileCode, err := verification.DefaultCodeGenerator.NewMobileCode(context.TODO(), "LOGIN", 0, phoneCN, verification.)
+	mobileCode, err := verification.DefaultCodeGenerator.NewMobileCode(context.TODO(), "LOGIN", 0, phoneCN, verification.ChinaCountryCode)
 	assert.Nil(t, err)
 	err = sender.Send(nil, mobileCode)
 	assert.Nil(t, err)

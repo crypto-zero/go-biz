@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.12
 	github.com/alibabacloud-go/dysmsapi-20170525/v3 v3.0.6
-	github.com/crypto-zero/go-biz/verification v0.0.0-20251006103533-fe1d4ca42c83
+	github.com/crypto-zero/go-biz/verification v0.0.0-20251006105426-276c489b11b7
 	github.com/stretchr/testify v1.11.1
 )
 

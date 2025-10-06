@@ -45,16 +45,16 @@ func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error
 		return verification.ErrNilMobileCode
 	}
 	if mobileCode.CountryCode == "" {
-		return verification.verificationErrMobileCodeCountryCodeIsEmpty
+		return verification.ErrMobileCodeCountryCodeIsEmpty
 	}
 	if mobileCode.Mobile == "" {
-		return ErrMobileCodeMobileIsEmpty
+		return verification.ErrMobileCodeMobileIsEmpty
 	}
 	if mobileCode.Code.Code == "" {
-		return ErrMobileCodeCodeIsEmpty
+		return verification.ErrMobileCodeCodeIsEmpty
 	}
 	if mobileCode.Type == "" {
-		return ErrMobileCodeTypeIsEmpty
+		return verification.ErrMobileCodeTypeIsEmpty
 	}
 	template, err := a.getTemplateByType(mobileCode.Type)
 	if err != nil {
@@ -69,7 +69,7 @@ func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error
 	return nil
 }
 
-// getTemplateByType retrieves the template for the given message type.
+// getTemplateByType retrieves the template for the given code type.
 func (a *SMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
 	t, ok := a.template[typ]
 	if !ok {
@@ -80,8 +80,8 @@ func (a *SMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
 
 // sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
 func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
-	if countryCode != ChinaCountryCode {
-		return ErrUnsupportedCountryCode
+	if countryCode != verification.ChinaCountryCode {
+		return verification.ErrUnsupportedCountryCode
 	}
 	request := &dysms.SendSmsRequest{}
 	request.SetSignName(signName)
