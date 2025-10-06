@@ -71,7 +71,7 @@ func init() {
 func TestAliyunSMS_SendMessageWithTemplate_CN(t *testing.T) {
 	cli, err := NewAliyunMainlandSMSClient(ak, sk, region, endpoint)
 	assert.Nil(t, err)
-	sender := NewAliyunSMS(cli, map[verification.CodeType]*Template{
+	sender := NewSMS(cli, map[verification.CodeType]*Template{
 		"LOGIN": {
 			SignName:     signCN,
 			Code:         tplCN,
