@@ -132,9 +132,8 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 		assert.Equal(t, "666666", fake.last.Code.Code)
 
 		// Verify OK should delete
-		ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "666666")
+		err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "666666")
 		assert.NoError(t, err)
-		assert.True(t, ok)
 		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrCodeNotFound))
@@ -159,9 +158,8 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 		assert.True(t, isNDigits(code, 4), "code should be 4 digits, got: %q", code)
 
 		// Verify OK should delete
-		ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
+		err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
 		assert.NoError(t, err)
-		assert.True(t, ok)
 		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrCodeNotFound))
@@ -185,9 +183,8 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	assert.True(t, isNDigits(sent, 4), "code should be 4 digits, got: %q", sent)
 
 	bad := wrongCodeFor(sent)
-	ok, err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
 	assert.NoError(t, err)
-	assert.False(t, ok)
 	// should still exist
 	_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
 	assert.NoError(t, err)

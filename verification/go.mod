@@ -5,6 +5,7 @@ go 1.23.2
 toolchain go1.24.4
 
 require (
+	github.com/alibabacloud-go/darabonba-openapi v0.2.1
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.9
 	github.com/alibabacloud-go/dysmsapi-20170525/v3 v3.0.6
 	github.com/alibabacloud-go/tea v1.3.10
@@ -13,14 +14,17 @@ require (
 	github.com/stretchr/testify v1.10.0
 )
 
-require golang.org/x/text v0.26.0 // indirect
+require (
+	github.com/alibabacloud-go/tea-xml v1.1.2 // indirect
+	golang.org/x/text v0.26.0 // indirect
+)
 
 require (
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
 	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
 	github.com/alibabacloud-go/openapi-util v0.1.0 // indirect
-	github.com/alibabacloud-go/tea-utils v1.3.1 // indirect
+	github.com/alibabacloud-go/tea-utils v1.4.3 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.7 // indirect
 	github.com/aliyun/credentials-go v1.4.5 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
