@@ -70,16 +70,13 @@ func init() {
 func TestAliyunSMS_SendMessageWithTemplate_CN(t *testing.T) {
 	cli, err := NewAliyunMainlandSMSClient(ak, sk, region, endpoint)
 	assert.Nil(t, err)
-	sender := &AliyunSMS{
-		mainlandClient: cli,
-		template: map[MessageType]*Template{
-			"LOGIN": {
-				SignName:     signCN,
-				Code:         tplCN,
-				ParamsFormat: `{"code":"%s"}`,
-			},
+	sender := NewAliyunSMS(cli, map[MessageType]*Template{
+		"LOGIN": {
+			SignName:     signCN,
+			Code:         tplCN,
+			ParamsFormat: `{"code":"%s"}`,
 		},
-	}
+	})
 	mobileCode, err := DefaultCodeGenerator.NewMobileCode(context.TODO(), "LOGIN", 0, phoneCN, ChinaCountryCode)
 	assert.Nil(t, err)
 	err = sender.Send(nil, mobileCode)
