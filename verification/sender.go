@@ -5,6 +5,7 @@ import (
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	"fmt"
 	"context"
+	"errors"
 )
 
 const (
@@ -42,19 +43,19 @@ func NewAliyunSMS(client *dysms.Client, template map[MessageType]*Template) Mobi
 
 func (a *AliyunSMS) Send(_ context.Context, mobileCode *MobileCode) error {
 	if mobileCode == nil {
-		return fmt.Errorf("code is nil")
+		return errors.New("mobileCode is nil")
 	}
 	if mobileCode.CountryCode == "" {
-		return fmt.Errorf("country code is empty")
+		return errors.New("mobile code country code is empty")
 	}
 	if mobileCode.Mobile == "" {
-		return fmt.Errorf("mobile is empty")
+		return errors.New("mobile code mobile is empty")
 	}
 	if mobileCode.Code.Code == "" {
-		return fmt.Errorf("code is empty")
+		return errors.New("mobile code code is empty")
 	}
 	if mobileCode.Type == "" {
-		return fmt.Errorf("code type is empty")
+		return errors.New("mobile code type is empty")
 	}
 	template, err := a.getTemplateByType(MessageType(mobileCode.Type))
 	if err != nil {
