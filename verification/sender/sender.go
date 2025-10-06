@@ -1,11 +1,23 @@
-package verification
+package sender
 
 import (
-	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
-	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	"fmt"
 	"context"
 	"errors"
+
+	"github.com/crypto-zero/go-biz/verification"
+	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
+	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
+)
+
+var (
+	ErrNilMobileCode                = errors.New("mobile code is nil")
+	ErrMobileCodeCountryCodeIsEmpty = errors.New("mobile code country code is empty")
+	ErrMobileCodeMobileIsEmpty      = errors.New("mobile code mobile is empty")
+	ErrMobileCodeCodeIsEmpty        = errors.New("mobile code code is empty")
+	ErrMobileCodeTypeIsEmpty        = errors.New("mobile code type is empty")
+	ErrUnsupportedCountryCode       = errors.New("unsupported country code")
+	ErrTemplateNotFound             = errors.New("template not found")
 )
 
 const (
@@ -13,13 +25,10 @@ const (
 	ChinaCountryCode = "86"
 )
 
-// MessageType represents the type of message to be sent.
-type MessageType string
-
 // AliyunSMS implements MobileCodeSender using Alibaba Cloud Dysms API.
 type AliyunSMS struct {
 	mainlandClient *dysms.Client
-	template       map[MessageType]*Template
+	template       map[verification.CodeType]*Template
 }
 
 // Template represents an SMS template with code and sign.
@@ -31,10 +40,10 @@ type Template struct {
 }
 
 // Compile-time assertion: AliyunSMS implements MobileCodeSender.
-var _ MobileCodeSender = (*AliyunSMS)(nil)
+var _ verification.MobileCodeSender = (*AliyunSMS)(nil)
 
 // NewAliyunSMS creates a new AliyunSMS with the given Dysms client.
-func NewAliyunSMS(client *dysms.Client, template map[MessageType]*Template) MobileCodeSender {
+func NewAliyunSMS(client *dysms.Client, template map[verification.CodeType]*Template) MobileCodeSender {
 	return &AliyunSMS{
 		mainlandClient: client,
 		template:       template,
@@ -42,23 +51,23 @@ func NewAliyunSMS(client *dysms.Client, template map[MessageType]*Template) Mobi
 }
 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
-func (a *AliyunSMS) Send(_ context.Context, mobileCode *MobileCode) error {
+func (a *AliyunSMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
 	if mobileCode == nil {
-		return errors.New("mobileCode is nil")
+		return ErrNilMobileCode
 	}
 	if mobileCode.CountryCode == "" {
-		return errors.New("mobile code country code is empty")
+		return ErrMobileCodeCountryCodeIsEmpty
 	}
 	if mobileCode.Mobile == "" {
-		return errors.New("mobile code mobile is empty")
+		return ErrMobileCodeMobileIsEmpty
 	}
 	if mobileCode.Code.Code == "" {
-		return errors.New("mobile code code is empty")
+		return ErrMobileCodeCodeIsEmpty
 	}
 	if mobileCode.Type == "" {
-		return errors.New("mobile code type is empty")
+		return ErrMobileCodeTypeIsEmpty
 	}
-	template, err := a.getTemplateByType(MessageType(mobileCode.Type))
+	template, err := a.getTemplateByType(mobileCode.Type)
 	if err != nil {
 		return err
 	}
@@ -71,10 +80,10 @@ func (a *AliyunSMS) Send(_ context.Context, mobileCode *MobileCode) error {
 }
 
 // getTemplateByType retrieves the template for the given message type.
-func (a *AliyunSMS) getTemplateByType(typ MessageType) (*Template, error) {
+func (a *AliyunSMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
 	t, ok := a.template[typ]
 	if !ok {
-		return nil, fmt.Errorf("template for type %s not found", typ)
+		return nil, ErrTemplateNotFound
 	}
 	return t, nil
 }
@@ -82,7 +91,7 @@ func (a *AliyunSMS) getTemplateByType(typ MessageType) (*Template, error) {
 // sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
 func (a *AliyunSMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
 	if countryCode != ChinaCountryCode {
-		return fmt.Errorf("only support country code %s", ChinaCountryCode)
+		return ErrUnsupportedCountryCode
 	}
 	request := &dysms.SendSmsRequest{}
 	request.SetSignName(signName)

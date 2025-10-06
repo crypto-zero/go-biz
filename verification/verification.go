@@ -14,11 +14,13 @@ var (
 	ErrCodeIncorrect = errors.New("verification code is incorrect")
 )
 
+type CodeType string
+
 type Code struct {
 	// user id
 	UserID int64
 	// type of the verification code
-	Type string
+	Type CodeType
 	// sequence of this verification
 	Sequence string
 	// code size

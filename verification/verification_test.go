@@ -74,10 +74,10 @@ func TestVerification_CodeCache_Basics(t *testing.T) {
 
 	t.Run("email set/get", func(t *testing.T) {
 		typ := "TEST_TYPE"
-		code, err := generator.NewEmailCode(ctx, typ, 1, "abc@def.com")
+		code, err := generator.NewEmailCode(ctx, CodeType(typ), 1, "abc@def.com")
 		assert.NoError(t, err)
 		assert.NoError(t, cache.SetEmailCode(ctx, code, time.Minute))
-		emailCode, err := cache.GetEmailCode(ctx, typ, code.Sequence, code.Email)
+		emailCode, err := cache.GetEmailCode(ctx, CodeType(typ), code.Sequence, code.Email)
 		assert.NoError(t, err)
 		assert.NotNil(t, emailCode)
 		assert.Equal(t, code.Content, emailCode.Content)
