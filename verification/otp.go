@@ -8,9 +8,9 @@ import (
 // OTPService provides methods to send and verify OTP codes.
 type OTPService interface {
 	// SendMobileOTP sends a mobile OTP code and returns the sequence.
-	SendMobileOTP(ctx context.Context, typ string, userID int64, mobile, countryCode string) (string, error)
+	SendMobileOTP(ctx context.Context, typ CodeType, userID int64, mobile, countryCode string) (string, error)
 	// VerifyMobileOTP verifies the mobile OTP code.
-	VerifyMobileOTP(ctx context.Context, typ, sequence, mobile, countryCode, input string) error
+	VerifyMobileOTP(ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string) error
 }
 
 // OTPServiceImpl encapsulates sending and verifying OTP codes.
@@ -49,7 +49,7 @@ func NewFourDigitOPTService(cache CodeCache, sender MobileCodeSender, ttl time.D
 
 // SendMobileOTP generates a code, stores it, sends SMS, and returns the sequence.
 func (s *OTPServiceImpl) SendMobileOTP(
-	ctx context.Context, typ string, userID int64, mobile, countryCode string,
+	ctx context.Context, typ CodeType, userID int64, mobile, countryCode string,
 ) (string, error) {
 	mc, err := s.generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
 	if err != nil {
@@ -65,7 +65,7 @@ func (s *OTPServiceImpl) SendMobileOTP(
 }
 
 func (s *OTPServiceImpl) VerifyMobileOTP(
-	ctx context.Context, typ, sequence, mobile, countryCode, input string,
+	ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string,
 ) error {
 	// Non-destructive read
 	stored, err := s.cache.PeekMobileCode(ctx, typ, sequence, mobile, countryCode)

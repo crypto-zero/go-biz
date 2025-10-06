@@ -72,11 +72,11 @@ func (staticCodeFactory) NewCode() (string, int32) {
 // CodeGenerator represents a verification code generator.
 type CodeGenerator interface {
 	// NewMobileCode generates a new mobile verification code.
-	NewMobileCode(ctx context.Context, typ string, userID int64, mobile, countryCode string) (*MobileCode, error)
+	NewMobileCode(ctx context.Context, typ CodeType, userID int64, mobile, countryCode string) (*MobileCode, error)
 	// NewEmailCode generates a new email verification code.
-	NewEmailCode(ctx context.Context, typ string, userID int64, email string) (*EmailCode, error)
+	NewEmailCode(ctx context.Context, typ CodeType, userID int64, email string) (*EmailCode, error)
 	// NewEcdsaCode generates a new ecdsa verification code.
-	NewEcdsaCode(ctx context.Context, typ string, userID int64, chain, address string) (*EcdsaCode, error)
+	NewEcdsaCode(ctx context.Context, typ CodeType, userID int64, chain, address string) (*EcdsaCode, error)
 }
 
 // defaultCodeGenerator uses the factory test code (fixed 666666).
@@ -88,7 +88,7 @@ type defaultCodeGenerator struct{ CodeFactory }
 var _ CodeGenerator = (*defaultCodeGenerator)(nil)
 
 func (g *defaultCodeGenerator) NewMobileCode(
-	_ context.Context, typ string, userID int64, mobile, countryCode string,
+	_ context.Context, typ CodeType, userID int64, mobile, countryCode string,
 ) (*MobileCode, error) {
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
@@ -98,7 +98,7 @@ func (g *defaultCodeGenerator) NewMobileCode(
 	return &MobileCode{
 		Code: Code{
 			UserID:     userID,
-			Type:       strings.ToUpper(typ),
+			Type:       CodeType(strings.ToUpper(string(typ))),
 			Sequence:   seq,
 			CodeLength: clen,
 			Code:       code,
@@ -112,7 +112,7 @@ func (g *defaultCodeGenerator) NewMobileCode(
 }
 
 func (g *defaultCodeGenerator) NewEmailCode(
-	_ context.Context, typ string, userID int64, email string,
+	_ context.Context, typ CodeType, userID int64, email string,
 ) (*EmailCode, error) {
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
@@ -122,7 +122,7 @@ func (g *defaultCodeGenerator) NewEmailCode(
 	return &EmailCode{
 		Code: Code{
 			UserID:     userID,
-			Type:       strings.ToUpper(typ),
+			Type:       CodeType(strings.ToUpper(string(typ))),
 			Sequence:   seq,
 			CodeLength: clen,
 			Code:       code,
@@ -135,7 +135,7 @@ func (g *defaultCodeGenerator) NewEmailCode(
 }
 
 func (g *defaultCodeGenerator) NewEcdsaCode(
-	_ context.Context, typ string, userID int64, chain, publicKeyHex string,
+	_ context.Context, typ CodeType, userID int64, chain, publicKeyHex string,
 ) (*EcdsaCode, error) {
 	if typ == "" {
 		return nil, ErrCodeTypeIsEmpty
@@ -146,7 +146,7 @@ func (g *defaultCodeGenerator) NewEcdsaCode(
 	return &EcdsaCode{
 		Code: Code{
 			UserID:     userID,
-			Type:       strings.ToUpper(typ),
+			Type:       CodeType(strings.ToUpper(string(typ))),
 			Sequence:   seq,
 			CodeLength: clen,
 			Code:       code,

@@ -24,25 +24,25 @@ type CodeCache interface {
 	// SetEcdsaCode sets the ecdsa verification code.
 	SetEcdsaCode(ctx context.Context, code *EcdsaCode, expire time.Duration) error
 	// GetMobileCode gets the mobile verification code.
-	GetMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (
+	GetMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (
 		*MobileCode, error,
 	)
 	// PeekMobileCode gets the mobile verification code without deleting it.
-	PeekMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (*MobileCode, error)
+	PeekMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (*MobileCode, error)
 	// DeleteMobileCode deletes the stored mobile verification code.
-	DeleteMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) error
+	DeleteMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error
 	// GetEmailCode gets the email verification code.
-	GetEmailCode(ctx context.Context, typ, sequence, email string) (*EmailCode, error)
+	GetEmailCode(ctx context.Context, typ CodeType, sequence, email string) (*EmailCode, error)
 	// PeekEmailCode gets the email verification code without deleting it.
-	PeekEmailCode(ctx context.Context, typ, sequence, email string) (*EmailCode, error)
+	PeekEmailCode(ctx context.Context, typ CodeType, sequence, email string) (*EmailCode, error)
 	// DeleteEmailCode deletes the stored email verification code.
-	DeleteEmailCode(ctx context.Context, typ, sequence, email string) error
+	DeleteEmailCode(ctx context.Context, typ CodeType, sequence, email string) error
 	// GetEcdsaCode gets the ecdsa verification code.
-	GetEcdsaCode(ctx context.Context, typ, sequence, chain, address string) (*EcdsaCode, error)
+	GetEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string) (*EcdsaCode, error)
 	// PeekEcdsaCode gets the ecdsa verification code without deleting it.
-	PeekEcdsaCode(ctx context.Context, typ, sequence, chain, address string) (*EcdsaCode, error)
+	PeekEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string) (*EcdsaCode, error)
 	// DeleteEcdsaCode deletes the stored ecdsa verification code.
-	DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error
+	DeleteEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string) error
 }
 
 // ============================================================================
@@ -66,28 +66,25 @@ func NewCodeCacheImpl(prefix CodeCacheKeyPrefix, client redis.UniversalClient) C
 	}
 }
 
-func (v CodeCacheImpl) MobileCodeKey(typ, sequence, mobile, countryCode string) string {
-	typ = strings.ToUpper(typ)
+func (v CodeCacheImpl) MobileCodeKey(typ CodeType, sequence, mobile, countryCode string) string {
 	return fmt.Sprintf(
-		"%s:VERIFICATION_CODE:MOBILE:%s:%s:%s:%s", v.prefix, typ,
+		"%s:VERIFICATION_CODE:MOBILE:%s:%s:%s:%s", v.prefix, strings.ToUpper(string(typ)),
 		sequence, mobile, countryCode,
 	)
 }
 
-func (v CodeCacheImpl) EmailCodeKey(typ, sequence, email string) string {
-	typ = strings.ToUpper(typ)
+func (v CodeCacheImpl) EmailCodeKey(typ CodeType, sequence, email string) string {
 	return fmt.Sprintf(
-		"%s:VERIFICATION_CODE:EMAIL:%s:%s:%s", v.prefix, typ, sequence,
+		"%s:VERIFICATION_CODE:EMAIL:%s:%s:%s", v.prefix, strings.ToUpper(string(typ)), sequence,
 		email,
 	)
 }
 
-func (v CodeCacheImpl) EcdsaCodeKey(typ, sequence, chain, address string,
+func (v CodeCacheImpl) EcdsaCodeKey(typ CodeType, sequence, chain, address string,
 ) string {
-	typ = strings.ToUpper(typ)
 	return fmt.Sprintf(
 		"%s:VERIFICATION_CODE:ECDSA:%s:%s:%s:%s",
-		v.prefix, typ, sequence, chain, address,
+		v.prefix, strings.ToUpper(string(typ)), sequence, chain, address,
 	)
 }
 
@@ -130,7 +127,7 @@ func (v CodeCacheImpl) SetEcdsaCode(ctx context.Context, code *EcdsaCode, expire
 	return nil
 }
 
-func (v CodeCacheImpl) GetMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string,
+func (v CodeCacheImpl) GetMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string,
 ) (*MobileCode, error) {
 	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
 	data, err := v.client.GetDel(ctx, key).Bytes()
@@ -149,7 +146,7 @@ func (v CodeCacheImpl) GetMobileCode(ctx context.Context, typ, sequence, mobile,
 	return &code, nil
 }
 
-func (v CodeCacheImpl) GetEmailCode(ctx context.Context, typ, sequence, email string,
+func (v CodeCacheImpl) GetEmailCode(ctx context.Context, typ CodeType, sequence, email string,
 ) (*EmailCode, error) {
 	key := v.EmailCodeKey(typ, sequence, email)
 	data, err := v.client.GetDel(ctx, key).Bytes()
@@ -168,7 +165,7 @@ func (v CodeCacheImpl) GetEmailCode(ctx context.Context, typ, sequence, email st
 	return &code, nil
 }
 
-func (v CodeCacheImpl) GetEcdsaCode(ctx context.Context, typ, sequence, chain, address string,
+func (v CodeCacheImpl) GetEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string,
 ) (*EcdsaCode, error) {
 	key := v.EcdsaCodeKey(typ, sequence, chain, address)
 	data, err := v.client.GetDel(ctx, key).Bytes()
@@ -187,7 +184,7 @@ func (v CodeCacheImpl) GetEcdsaCode(ctx context.Context, typ, sequence, chain, a
 	return &code, nil
 }
 
-func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) (
+func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (
 	*MobileCode, error,
 ) {
 	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
@@ -207,7 +204,7 @@ func (v CodeCacheImpl) PeekMobileCode(ctx context.Context, typ, sequence, mobile
 	return &code, nil
 }
 
-func (v CodeCacheImpl) DeleteMobileCode(ctx context.Context, typ, sequence, mobile, countryCode string) error {
+func (v CodeCacheImpl) DeleteMobileCode(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error {
 	key := v.MobileCodeKey(typ, sequence, mobile, countryCode)
 	if err := v.client.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("failed to delete mobile verification code: %w", err)
@@ -215,7 +212,7 @@ func (v CodeCacheImpl) DeleteMobileCode(ctx context.Context, typ, sequence, mobi
 	return nil
 }
 
-func (v CodeCacheImpl) PeekEmailCode(ctx context.Context, typ, sequence, email string) (*EmailCode, error) {
+func (v CodeCacheImpl) PeekEmailCode(ctx context.Context, typ CodeType, sequence, email string) (*EmailCode, error) {
 	key := v.EmailCodeKey(typ, sequence, email)
 	data, err := v.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
@@ -233,7 +230,7 @@ func (v CodeCacheImpl) PeekEmailCode(ctx context.Context, typ, sequence, email s
 	return &code, nil
 }
 
-func (v CodeCacheImpl) DeleteEmailCode(ctx context.Context, typ, sequence, email string) error {
+func (v CodeCacheImpl) DeleteEmailCode(ctx context.Context, typ CodeType, sequence, email string) error {
 	key := v.EmailCodeKey(typ, sequence, email)
 	if err := v.client.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("failed to delete email verification code: %w", err)
@@ -241,7 +238,7 @@ func (v CodeCacheImpl) DeleteEmailCode(ctx context.Context, typ, sequence, email
 	return nil
 }
 
-func (v CodeCacheImpl) PeekEcdsaCode(ctx context.Context, typ, sequence, chain, address string) (*EcdsaCode, error) {
+func (v CodeCacheImpl) PeekEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string) (*EcdsaCode, error) {
 	key := v.EcdsaCodeKey(typ, sequence, chain, address)
 	data, err := v.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
@@ -259,7 +256,7 @@ func (v CodeCacheImpl) PeekEcdsaCode(ctx context.Context, typ, sequence, chain, 
 	return &code, nil
 }
 
-func (v CodeCacheImpl) DeleteEcdsaCode(ctx context.Context, typ, sequence, chain, address string) error {
+func (v CodeCacheImpl) DeleteEcdsaCode(ctx context.Context, typ CodeType, sequence, chain, address string) error {
 	key := v.EcdsaCodeKey(typ, sequence, chain, address)
 	if err := v.client.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("failed to delete ecdsa verification code: %w", err)
