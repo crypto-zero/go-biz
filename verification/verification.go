@@ -14,6 +14,26 @@ var (
 	ErrCodeIncorrect = errors.New("verification code is incorrect")
 )
 
+var (
+	// ErrNilMobileCode represents a nil mobile code error.
+	ErrNilMobileCode = errors.New("mobile code is nil")
+	// ErrMobileCodeCountryCodeIsEmpty represents an empty country code error.
+	ErrMobileCodeCountryCodeIsEmpty = errors.New("mobile code country code is empty")
+	// ErrMobileCodeMobileIsEmpty represents an empty mobile number error.
+	ErrMobileCodeMobileIsEmpty = errors.New("mobile code mobile is empty")
+	// ErrMobileCodeCodeIsEmpty represents an empty code error.
+	ErrMobileCodeCodeIsEmpty = errors.New("mobile code code is empty")
+	// ErrMobileCodeTypeIsEmpty represents an empty code type error.
+	ErrMobileCodeTypeIsEmpty = errors.New("mobile code type is empty")
+	// ErrUnsupportedCountryCode represents an unsupported country code error.
+	ErrUnsupportedCountryCode = errors.New("unsupported country code")
+)
+
+const (
+	// ChinaCountryCode is the country code for China.
+	ChinaCountryCode = "86"
+)
+
 type CodeType string
 
 type Code struct {

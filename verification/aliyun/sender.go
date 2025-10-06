@@ -11,18 +11,7 @@ import (
 )
 
 var (
-	ErrNilMobileCode                = errors.New("mobile code is nil")
-	ErrMobileCodeCountryCodeIsEmpty = errors.New("mobile code country code is empty")
-	ErrMobileCodeMobileIsEmpty      = errors.New("mobile code mobile is empty")
-	ErrMobileCodeCodeIsEmpty        = errors.New("mobile code code is empty")
-	ErrMobileCodeTypeIsEmpty        = errors.New("mobile code type is empty")
-	ErrUnsupportedCountryCode       = errors.New("unsupported country code")
-	ErrTemplateNotFound             = errors.New("template not found")
-)
-
-const (
-	// ChinaCountryCode is the country code for China.
-	ChinaCountryCode = "86"
+	ErrTemplateNotFound = errors.New("template not found")
 )
 
 // SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
@@ -53,10 +42,10 @@ func NewSMS(client *dysms.Client, template map[verification.CodeType]*Template) 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
 func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
 	if mobileCode == nil {
-		return ErrNilMobileCode
+		return verification.ErrNilMobileCode
 	}
 	if mobileCode.CountryCode == "" {
-		return ErrMobileCodeCountryCodeIsEmpty
+		return verification.verificationErrMobileCodeCountryCodeIsEmpty
 	}
 	if mobileCode.Mobile == "" {
 		return ErrMobileCodeMobileIsEmpty
