@@ -41,6 +41,7 @@ func NewAliyunSMS(client *dysms.Client, template map[MessageType]*Template) Mobi
 	}
 }
 
+// Send sends a mobile code using the appropriate template based on the MobileCode type.
 func (a *AliyunSMS) Send(_ context.Context, mobileCode *MobileCode) error {
 	if mobileCode == nil {
 		return errors.New("mobileCode is nil")
@@ -69,6 +70,7 @@ func (a *AliyunSMS) Send(_ context.Context, mobileCode *MobileCode) error {
 	return nil
 }
 
+// getTemplateByType retrieves the template for the given message type.
 func (a *AliyunSMS) getTemplateByType(typ MessageType) (*Template, error) {
 	t, ok := a.template[typ]
 	if !ok {
@@ -77,6 +79,7 @@ func (a *AliyunSMS) getTemplateByType(typ MessageType) (*Template, error) {
 	return t, nil
 }
 
+// sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
 func (a *AliyunSMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
 	if countryCode != ChinaCountryCode {
 		return fmt.Errorf("only support country code %s", ChinaCountryCode)
@@ -96,6 +99,7 @@ func (a *AliyunSMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, 
 	return nil
 }
 
+// NewAliyunMainlandSMSClient creates a new Dysms client for mainland China.
 func NewAliyunMainlandSMSClient(accessKeyID, accessKeySecret, regionID, endpoint string) (*dysms.Client, error) {
 	config := new(openapi.Config)
 	config.SetAccessKeyId(accessKeyID).
