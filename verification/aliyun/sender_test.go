@@ -1,4 +1,4 @@
-package sender
+package aliyun
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 	"log"
 	"github.com/stretchr/testify/assert"
 	"context"
+	"github.com/crypto-zero/go-biz/verification"
 )
 
 func mustEnv(key string) (string, error) {
@@ -70,14 +71,14 @@ func init() {
 func TestAliyunSMS_SendMessageWithTemplate_CN(t *testing.T) {
 	cli, err := NewAliyunMainlandSMSClient(ak, sk, region, endpoint)
 	assert.Nil(t, err)
-	sender := NewAliyunSMS(cli, map[MessageType]*Template{
+	sender := NewAliyunSMS(cli, map[verification.CodeType]*Template{
 		"LOGIN": {
 			SignName:     signCN,
 			Code:         tplCN,
 			ParamsFormat: `{"code":"%s"}`,
 		},
 	})
-	mobileCode, err := DefaultCodeGenerator.NewMobileCode(context.TODO(), "LOGIN", 0, phoneCN, ChinaCountryCode)
+	mobileCode, err := verification.DefaultCodeGenerator.NewMobileCode(context.TODO(), "LOGIN", 0, phoneCN, ChinaCountryCode)
 	assert.Nil(t, err)
 	err = sender.Send(nil, mobileCode)
 	assert.Nil(t, err)

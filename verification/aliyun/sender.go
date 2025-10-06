@@ -1,4 +1,4 @@
-package sender
+package aliyun
 
 import (
 	"fmt"
@@ -25,8 +25,8 @@ const (
 	ChinaCountryCode = "86"
 )
 
-// AliyunSMS implements MobileCodeSender using Alibaba Cloud Dysms API.
-type AliyunSMS struct {
+// SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
+type SMS struct {
 	mainlandClient *dysms.Client
 	template       map[verification.CodeType]*Template
 }
@@ -40,18 +40,18 @@ type Template struct {
 }
 
 // Compile-time assertion: AliyunSMS implements MobileCodeSender.
-var _ verification.MobileCodeSender = (*AliyunSMS)(nil)
+var _ verification.MobileCodeSender = (*SMS)(nil)
 
-// NewAliyunSMS creates a new AliyunSMS with the given Dysms client.
-func NewAliyunSMS(client *dysms.Client, template map[verification.CodeType]*Template) MobileCodeSender {
-	return &AliyunSMS{
+// NewSMS creates a new AliyunSMS with the given Dysms client.
+func NewSMS(client *dysms.Client, template map[verification.CodeType]*Template) *SMS {
+	return &SMS{
 		mainlandClient: client,
 		template:       template,
 	}
 }
 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
-func (a *AliyunSMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
+func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
 	if mobileCode == nil {
 		return ErrNilMobileCode
 	}
@@ -71,16 +71,17 @@ func (a *AliyunSMS) Send(_ context.Context, mobileCode *verification.MobileCode)
 	if err != nil {
 		return err
 	}
-	if err := a.sendMessageWithTemplate(template.SignName,
+	if err = a.sendMessageWithTemplate(template.SignName,
 		mobileCode.CountryCode, mobileCode.Mobile,
-		template.Code, mobileCode.Format(template.ParamsFormat, mobileCode.Code.Code)); err != nil {
+		template.Code, mobileCode.Format(template.ParamsFormat,
+			mobileCode.Code.Code)); err != nil {
 		return err
 	}
 	return nil
 }
 
 // getTemplateByType retrieves the template for the given message type.
-func (a *AliyunSMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
+func (a *SMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
 	t, ok := a.template[typ]
 	if !ok {
 		return nil, ErrTemplateNotFound
@@ -89,7 +90,7 @@ func (a *AliyunSMS) getTemplateByType(typ verification.CodeType) (*Template, err
 }
 
 // sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
-func (a *AliyunSMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
+func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
 	if countryCode != ChinaCountryCode {
 		return ErrUnsupportedCountryCode
 	}
