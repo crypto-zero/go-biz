@@ -12,6 +12,18 @@ var (
 	ErrCodeTypeIsEmpty = errors.New("verification code type is empty")
 	// ErrCodeIncorrect represents a verification code incorrect error.
 	ErrCodeIncorrect = errors.New("verification code is incorrect")
+	// ErrMobileSendLimitExceeded indicates that the mobile number has exceeded the limit for sending OTPs.
+	ErrMobileSendLimitExceeded = errors.New("mobile send OTP limit exceeded")
+	// ErrMobileVerifyLimitExceeded indicates that the mobile number has exceeded the limit for verifying OTPs.
+	ErrMobileVerifyLimitExceeded = errors.New("mobile verify OTP limit exceeded")
+	// ErrEmailSendLimitExceeded indicates that the email address has exceeded the limit for sending OTPs.
+	ErrEmailSendLimitExceeded = errors.New("email send OTP limit exceeded")
+	// ErrEmailVerifyLimitExceeded indicates that the email address has exceeded the limit for verifying OTPs.
+	ErrEmailVerifyLimitExceeded = errors.New("email verify OTP limit exceeded")
+	// ErrEcdsaSendLimitExceeded indicates that the ecdsa address has exceeded the limit for sending OTPs.
+	ErrEcdsaSendLimitExceeded = errors.New("ecdsa send OTP limit exceeded")
+	// ErrEcdsaVerifyLimitExceeded indicates that the ecdsa address has exceeded the limit for verifying OTPs.
+	ErrEcdsaVerifyLimitExceeded = errors.New("ecdsa verify OTP limit exceeded")
 )
 
 var (

@@ -119,7 +119,8 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
-	svc := NewStaticOTPService(cache, fake, 5*time.Minute)
+	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
+	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
 
 	// Send
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -147,7 +148,8 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 
 	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
-	svc := NewFourDigitOPTService(cache, fake, 5*time.Minute)
+	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
+	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -173,7 +175,9 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
-	svc := NewFourDigitOPTService(cache, fake, 5*time.Minute)
+	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
+	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute,
+		10, 10)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -188,4 +192,110 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	// should still exist
 	_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
 	assert.NoError(t, err)
+}
+
+func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	sender := &fakeSMSSender{}
+	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 5, 2)
+
+	// Send OTP
+	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq)
+	assert.NotNil(t, sender.last)
+	code := sender.last.Code.Code
+
+	// First wrong attempt
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
+
+	// Second wrong attempt
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
+
+	// Third wrong attempt
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
+
+	// Fourth wrong attempt should hit limit
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeNotFound)
+
+	// Correct code after limit should still fail
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
+	assert.ErrorIs(t, err, ErrCodeNotFound)
+}
+
+func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, ff := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	sender := &fakeSMSSender{}
+	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Second, time.Second, time.Second, 5, 2)
+
+	// Send OTP
+	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	code := sender.last.Code.Code
+
+	// Verify with correct code before hitting limit
+	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
+	assert.NoError(t, err)
+
+	// Send another OTP
+	seq2, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	code2 := sender.last.Code.Code
+
+	// Expire the code
+	ff(2 * time.Second)
+	err = svc.VerifyMobileOTP(ctx, "login", seq2, "13800138000", "86", code2)
+	assert.ErrorIs(t, err, ErrCodeNotFound)
+
+	// Send again and test limit
+	seq3, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	code3 := sender.last.Code.Code
+	for i := 0; i < 2; i++ {
+		err = svc.VerifyMobileOTP(ctx, "login", seq3, "13800138000", "86", wrongCodeFor(code3))
+		assert.ErrorIs(t, err, ErrCodeIncorrect)
+	}
+	// Should hit limit now
+	err = svc.VerifyMobileOTP(ctx, "login", seq3, "13800138000", "86", wrongCodeFor(code3))
+	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
+}
+
+func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	sender := &fakeSMSSender{}
+	// Set send limit to 2
+	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 2, 5)
+
+	// First send
+	seq1, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq1)
+
+	// Second send
+	seq2, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq2)
+
+	// Third send should hit limit
+	_, err = svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
+	assert.ErrorIs(t, err, ErrMobileSendLimitExceeded)
 }
