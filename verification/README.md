@@ -26,16 +26,22 @@ import (
     "time"
 )
 
-redisClient := redis.NewClient(&redis.Options{
-    Addr: "localhost:6379",
-})
+// You need to implement or use existing CodeCache, CodeLimiterCache, MobileCodeSender, CodeGenerator
+var cache verification.CodeCache
+var limiterCache verification.CodeLimiterCache
+var sender verification.MobileCodeSender
+var generator verification.CodeGenerator
 
 otpService := verification.NewOTPService(
-    verification.WithRedisClient(redisClient),
-    verification.WithTTL(5 * time.Minute),
-    verification.WithMobileCodeLength(6),
-    verification.WithMaxVerifyFailures(3),
-    verification.WithVerifyWindowDuration(10 * time.Minute),
+    cache,
+    limiterCache,
+    sender,
+    generator,
+    time.Hour,         // sendWindowDuration
+    10*time.Minute,    // verifyWindowDuration
+    5*time.Minute,     // ttl
+    3,                 // maxSendAttempts
+    3,                 // maxVerifyFailures
 )
 ```
 
@@ -45,10 +51,9 @@ otpService := verification.NewOTPService(
 sequence, err := otpService.SendMobileOTP(
     ctx,
     verification.CodeTypeRegister,
+    12345,           // userID
     "13800138000",
     "86",
-    3,
-    time.Hour,
 )
 if err != nil {
     // Handle errors
@@ -68,7 +73,7 @@ err := otpService.VerifyMobileOTP(
     sequence,
     "13800138000",
     "86",
-    "123456",
+    "123456",        // user input
 )
 if err != nil {
     // Handle errors
