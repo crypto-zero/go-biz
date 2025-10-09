@@ -309,12 +309,19 @@ type LimitDecision struct {
 }
 
 type CodeLimiterCache interface {
-	// AllowMobile applies a fixed-window limit for mobile verification attempts.
-	AllowMobile(ctx context.Context, typ CodeType, sequence, mobile, countryCode string, limit int64, window time.Duration) (*LimitDecision, error)
-	// AllowEmail applies a fixed-window limit for email verification attempts.
-	AllowEmail(ctx context.Context, typ CodeType, sequence, email string, limit int64, window time.Duration) (*LimitDecision, error)
-	// AllowEcdsa applies a fixed-window limit for ecdsa verification attempts.
-	AllowEcdsa(ctx context.Context, typ CodeType, sequence, chain, address string, limit int64, window time.Duration) (*LimitDecision, error)
+	// AllowSendMobile applies a fixed-window limit for mobile verification attempts.
+	AllowSendMobile(ctx context.Context, typ CodeType, mobile, countryCode string, limit int64, window time.Duration) (*LimitDecision, error)
+	// AllowSendEmail applies a fixed-window limit for email verification attempts.
+	AllowSendEmail(ctx context.Context, typ CodeType, email string, limit int64, window time.Duration) (*LimitDecision, error)
+	// AllowSendEcdsa applies a fixed-window limit for ecdsa verification attempts.
+	AllowSendEcdsa(ctx context.Context, typ CodeType, chain, address string, limit int64, window time.Duration) (*LimitDecision, error)
+
+	// GetVerifyMobileCount applies a fixed-window limit for mobile verification attempts.
+	GetVerifyMobileCount(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (int64, error)
+	// GetVerifyEmailCount applies a fixed-window limit for email verification attempts.
+	GetVerifyEmailCount(ctx context.Context, typ CodeType, sequence, email string) (int64, error)
+	// GetVerifyEcdsaCount applies a fixed-window limit for ecdsa verification attempts.
+	GetVerifyEcdsaCount(ctx context.Context, typ CodeType, sequence, chain, address string) (int64, error)
 
 	// RecordMobileVerifyFailure records a verification failure and returns lock status
 	RecordMobileVerifyFailure(ctx context.Context, typ CodeType, sequence, mobile, countryCode string, maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error)
@@ -396,36 +403,72 @@ func (v *CodeLimiterCacheImpl) ecdsaFailureKey(typ CodeType, sequence, chain, ad
 }
 
 // mobileLimitKey constructs the Redis key for mobile verification limits.
-func (v *CodeLimiterCacheImpl) mobileLimitKey(typ CodeType, sequence, mobile, countryCode string) string {
-	return v.buildKey("VERIFICATION_SEND_LIMIT", "MOBILE", strings.ToUpper(string(typ)), sequence, mobile, countryCode)
+func (v *CodeLimiterCacheImpl) mobileLimitKey(typ CodeType, mobile, countryCode string) string {
+	return v.buildKey("VERIFICATION_SEND_LIMIT", "MOBILE", strings.ToUpper(string(typ)), mobile, countryCode)
 }
 
 // emailLimitKey constructs the Redis key for email verification limits.
-func (v *CodeLimiterCacheImpl) emailLimitKey(typ CodeType, sequence, email string) string {
-	return v.buildKey("VERIFICATION_SEND_LIMIT", "EMAIL", strings.ToUpper(string(typ)), sequence, email)
+func (v *CodeLimiterCacheImpl) emailLimitKey(typ CodeType, email string) string {
+	return v.buildKey("VERIFICATION_SEND_LIMIT", "EMAIL", strings.ToUpper(string(typ)), email)
 }
 
 // ecdsaLimitKey constructs the Redis key for ecdsa verification limits.
-func (v *CodeLimiterCacheImpl) ecdsaLimitKey(typ CodeType, sequence, chain, address string) string {
-	return v.buildKey("VERIFICATION_SEND_LIMIT", "ECDSA", strings.ToUpper(string(typ)), sequence, chain, address)
+func (v *CodeLimiterCacheImpl) ecdsaLimitKey(typ CodeType, chain, address string) string {
+	return v.buildKey("VERIFICATION_SEND_LIMIT", "ECDSA", strings.ToUpper(string(typ)), chain, address)
 }
 
-// AllowMobile applies a fixed-window limit for mobile verification attempts.
-func (v *CodeLimiterCacheImpl) AllowMobile(ctx context.Context, typ CodeType, sequence, mobile, countryCode string,
+// AllowSendMobile applies a fixed-window limit for mobile verification attempts.
+func (v *CodeLimiterCacheImpl) AllowSendMobile(ctx context.Context, typ CodeType, mobile, countryCode string,
 	limit int64, window time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.mobileLimitKey(typ, sequence, mobile, countryCode), limit, window)
+	return v.evalFixedWindow(ctx, v.mobileLimitKey(typ, mobile, countryCode), limit, window)
 }
 
-// AllowEmail applies a fixed-window limit for email verification attempts.
-func (v *CodeLimiterCacheImpl) AllowEmail(ctx context.Context, typ CodeType, sequence, email string,
+// AllowSendEmail applies a fixed-window limit for email verification attempts.
+func (v *CodeLimiterCacheImpl) AllowSendEmail(ctx context.Context, typ CodeType, email string,
 	limit int64, window time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.emailLimitKey(typ, sequence, email), limit, window)
+	return v.evalFixedWindow(ctx, v.emailLimitKey(typ, email), limit, window)
 }
 
-// AllowEcdsa applies a fixed-window limit for ecdsa verification attempts.
-func (v *CodeLimiterCacheImpl) AllowEcdsa(ctx context.Context, typ CodeType, sequence, chain, address string,
+// AllowSendEcdsa applies a fixed-window limit for ecdsa verification attempts.
+func (v *CodeLimiterCacheImpl) AllowSendEcdsa(ctx context.Context, typ CodeType, chain, address string,
 	limit int64, window time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.ecdsaLimitKey(typ, sequence, chain, address), limit, window)
+	return v.evalFixedWindow(ctx, v.ecdsaLimitKey(typ, chain, address), limit, window)
+}
+
+// GetVerifyMobileCount gets the current count of mobile verification attempts.
+func (v *CodeLimiterCacheImpl) GetVerifyMobileCount(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (int64, error) {
+	cnt, err := v.client.Get(ctx, v.mobileFailureKey(typ, sequence, mobile, countryCode)).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get mobile verification failure count: %w", err)
+	}
+	return cnt, nil
+}
+
+// GetVerifyEmailCount gets the current count of email verification attempts.
+func (v *CodeLimiterCacheImpl) GetVerifyEmailCount(ctx context.Context, typ CodeType, sequence, email string) (int64, error) {
+	cnt, err := v.client.Get(ctx, v.emailFailureKey(typ, sequence, email)).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get email verification failure count: %w", err)
+	}
+	return cnt, nil
+}
+
+// GetVerifyEcdsaCount gets the current count of ecdsa verification attempts.
+func (v *CodeLimiterCacheImpl) GetVerifyEcdsaCount(ctx context.Context, typ CodeType, sequence, chain, address string) (int64, error) {
+	cnt, err := v.client.Get(ctx, v.ecdsaFailureKey(typ, sequence, chain, address)).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get ecdsa verification failure count: %w", err)
+	}
+	return cnt, nil
 }
 
 // RecordMobileVerifyFailure records a verification failure and returns lock status.
