@@ -101,7 +101,7 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 	if err != nil {
 		return err
 	}
-	if cnt >= s.verifyAttempts {
+	if cnt > s.verifyAttempts {
 		return ErrMobileVerifyLimitExceeded
 	}
 	// Non-destructive read
