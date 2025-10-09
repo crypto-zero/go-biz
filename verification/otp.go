@@ -81,7 +81,7 @@ func (s *OTPServiceImpl) SendMobileOTP(
 	}
 	if !allowMobile.Allowed {
 		if allowMobile.Count > allowMobile.Limit {
-			return "", ErrMobileLimitExceeded
+			return "", ErrMobileSendLimitExceeded
 		}
 		return "", ErrMobileNotAllowed
 	}

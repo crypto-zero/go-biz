@@ -297,5 +297,5 @@ func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
 
 	// Third send should hit limit
 	_, err = svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
-	assert.ErrorIs(t, err, ErrMobileLimitExceeded)
+	assert.ErrorIs(t, err, ErrMobileSendLimitExceeded)
 }

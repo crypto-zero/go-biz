@@ -14,8 +14,8 @@ var (
 	ErrCodeIncorrect = errors.New("verification code is incorrect")
 	// ErrMobileNotAllowed indicates that the mobile number is not allowed to receive more OTPs.
 	ErrMobileNotAllowed = errors.New("mobile not allowed to send OTP")
-	// ErrMobileLimitExceeded indicates that the mobile number has exceeded the limit for sending OTPs.
-	ErrMobileLimitExceeded = errors.New("mobile send OTP limit exceeded")
+	// ErrMobileSendLimitExceeded indicates that the mobile number has exceeded the limit for sending OTPs.
+	ErrMobileSendLimitExceeded = errors.New("mobile send OTP limit exceeded")
 	// ErrMobileVerifyLimitExceeded indicates that the mobile number has exceeded the limit for verifying OTPs.
 	ErrMobileVerifyLimitExceeded = errors.New("mobile verify OTP limit exceeded")
 )
