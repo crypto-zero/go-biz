@@ -21,9 +21,9 @@ type OTPServiceImpl struct {
 	limiterCache CodeLimiterCache
 	// Policy
 	ttl                  time.Duration // e.g., 5 * time.Minute
-	sendAttempts         int64         // max send attempts within sendWindowDuration
+	maxSendAttempts      int64         // max send attempts within sendWindowDuration
 	sendWindowDuration   time.Duration // e.g., 1 hour
-	verifyAttempts       int64         // max verify attempts within verifyWindowDuration
+	maxVerifyFailures    int64         // max verify attempts within verifyWindowDuration
 	verifyWindowDuration time.Duration // e.g., 1 hour
 }
 
@@ -33,7 +33,7 @@ type OTPServiceImpl struct {
 func NewOTPService(
 	cache CodeCache, limiterCache CodeLimiterCache, sender MobileCodeSender,
 	gen CodeGenerator, sendWindowDuration, verifyWindowDuration, ttl time.Duration,
-	sendAttempts, verifyAttempts int64,
+	maxSendAttempts, maxVerifyFailures int64,
 ) *OTPServiceImpl {
 	return &OTPServiceImpl{
 		cache:                cache,
@@ -41,9 +41,9 @@ func NewOTPService(
 		generator:            gen,
 		limiterCache:         limiterCache,
 		ttl:                  ttl,
-		sendAttempts:         sendAttempts,         // max send attempts within sendWindowDuration
+		maxSendAttempts:      maxSendAttempts,      // max send attempts within sendWindowDuration
 		sendWindowDuration:   sendWindowDuration,   // e.g., 1 hour
-		verifyAttempts:       verifyAttempts,       // max verify attempts within verifyWindowDuration
+		maxVerifyFailures:    maxVerifyFailures,    // max verify attempts within verifyWindowDuration
 		verifyWindowDuration: verifyWindowDuration, // e.g., 1 hour
 	}
 }
@@ -70,38 +70,44 @@ func NewFourDigitOPTService(cache CodeCache, sender MobileCodeSender,
 func (s *OTPServiceImpl) SendMobileOTP(
 	ctx context.Context, typ CodeType, userID int64, mobile, countryCode string,
 ) (string, error) {
-	mc, err := s.generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
-	if err != nil {
-		return "", err
-	}
+	// Rate limiting check
 	allowMobile, err := s.limiterCache.AllowSendMobile(ctx, typ, mobile, countryCode,
-		s.sendAttempts, s.sendWindowDuration)
+		s.maxSendAttempts, s.sendWindowDuration)
 	if err != nil {
 		return "", err
 	}
 	if !allowMobile.Allowed {
-		if allowMobile.Count > allowMobile.Limit {
-			return "", ErrMobileSendLimitExceeded
-		}
-		return "", ErrMobileNotAllowed
+		return "", ErrMobileSendLimitExceeded
+	}
+
+	mc, err := s.generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
+	if err != nil {
+		return "", err
 	}
 	if err = s.cache.SetMobileCode(ctx, mc, s.ttl); err != nil {
 		return "", err
 	}
 	if err = s.smsSender.Send(ctx, mc); err != nil {
+		_ = s.cache.DeleteMobileCode(ctx, typ, mc.Sequence, mobile, countryCode)
 		return "", err
 	}
 	return mc.Sequence, nil
 }
 
+// VerifyMobileOTP verifies the mobile OTP code.
 func (s *OTPServiceImpl) VerifyMobileOTP(
 	ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string,
 ) error {
+	// Rate limiting check
 	cnt, err := s.limiterCache.GetVerifyMobileCount(ctx, typ, sequence, mobile, countryCode)
 	if err != nil {
 		return err
 	}
-	if cnt > s.verifyAttempts {
+	if cnt >= s.maxVerifyFailures {
+		// Exceeded max attempts, delete the code to prevent further tries
+		// and clear the failure count
+		_ = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode)
+		_ = s.limiterCache.DeleteMobileVerifyFailures(ctx, typ, sequence, mobile, countryCode)
 		return ErrMobileVerifyLimitExceeded
 	}
 	// Non-destructive read
@@ -111,11 +117,8 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 	}
 
 	if stored.Code.Code != input {
-		_, err = s.limiterCache.RecordMobileVerifyFailure(ctx, typ, sequence, mobile, countryCode,
-			s.verifyAttempts, s.verifyWindowDuration)
-		if err != nil {
-			return err
-		}
+		_, _ = s.limiterCache.SetMobileVerifyFailure(ctx, typ, sequence, mobile, countryCode,
+			s.maxVerifyFailures, s.verifyWindowDuration)
 		return ErrCodeIncorrect
 	}
 	// Delete after successful verification (one-time code)
@@ -123,8 +126,6 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 		return err
 	}
 	// Clear verify failure count on success
-	if err = s.limiterCache.ClearMobileVerifyFailures(ctx, typ, sequence, mobile, countryCode); err != nil {
-		return err
-	}
+	_ = s.limiterCache.DeleteMobileVerifyFailures(ctx, typ, sequence, mobile, countryCode)
 	return nil
 }

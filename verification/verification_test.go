@@ -221,15 +221,15 @@ func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
 
 	// Third wrong attempt
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
-	assert.ErrorIs(t, err, ErrCodeIncorrect)
+	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
 
 	// Fourth wrong attempt should hit limit
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
-	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
+	assert.ErrorIs(t, err, ErrCodeNotFound)
 
 	// Correct code after limit should still fail
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
-	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
+	assert.ErrorIs(t, err, ErrCodeNotFound)
 }
 
 func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {

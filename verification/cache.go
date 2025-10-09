@@ -323,19 +323,19 @@ type CodeLimiterCache interface {
 	// GetVerifyEcdsaCount applies a fixed-window limit for ecdsa verification attempts.
 	GetVerifyEcdsaCount(ctx context.Context, typ CodeType, sequence, chain, address string) (int64, error)
 
-	// RecordMobileVerifyFailure records a verification failure and returns lock status
-	RecordMobileVerifyFailure(ctx context.Context, typ CodeType, sequence, mobile, countryCode string, maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error)
-	// RecordEmailVerifyFailure records a verification failure and returns lock status
-	RecordEmailVerifyFailure(ctx context.Context, typ CodeType, sequence, email string, maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error)
-	// RecordEcdsaVerifyFailure records a verification failure and returns lock status
-	RecordEcdsaVerifyFailure(ctx context.Context, typ CodeType, sequence, chain, address string, maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error)
+	// SetMobileVerifyFailure set a verification failure and returns lock status
+	SetMobileVerifyFailure(ctx context.Context, typ CodeType, sequence, mobile, countryCode string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
+	// SetEmailVerifyFailure set a verification failure and returns lock status
+	SetEmailVerifyFailure(ctx context.Context, typ CodeType, sequence, email string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
+	// SetEcdsaVerifyFailure set a verification failure and returns lock status
+	SetEcdsaVerifyFailure(ctx context.Context, typ CodeType, sequence, chain, address string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
 
-	// ClearMobileVerifyFailures clears failure count (call on successful verification)
-	ClearMobileVerifyFailures(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error
-	// ClearEmailVerifyFailures clears failure count (call on successful verification)
-	ClearEmailVerifyFailures(ctx context.Context, typ CodeType, sequence, email string) error
-	// ClearEcdsaVerifyFailures clears failure count (call on successful verification)
-	ClearEcdsaVerifyFailures(ctx context.Context, typ CodeType, sequence, chain, address string) error
+	// DeleteMobileVerifyFailures clears failure count (call on successful verification)
+	DeleteMobileVerifyFailures(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error
+	// DeleteEmailVerifyFailures clears failure count (call on successful verification)
+	DeleteEmailVerifyFailures(ctx context.Context, typ CodeType, sequence, email string) error
+	// DeleteEcdsaVerifyFailures clears failure count (call on successful verification)
+	DeleteEcdsaVerifyFailures(ctx context.Context, typ CodeType, sequence, chain, address string) error
 }
 
 // NewCodeLimiterCacheImpl creates a new instance of CodeLimiterCacheImpl.
@@ -471,26 +471,26 @@ func (v *CodeLimiterCacheImpl) GetVerifyEcdsaCount(ctx context.Context, typ Code
 	return cnt, nil
 }
 
-// RecordMobileVerifyFailure records a verification failure and returns lock status.
-func (v *CodeLimiterCacheImpl) RecordMobileVerifyFailure(ctx context.Context, typ CodeType, sequence, mobile, countryCode string,
+// SetMobileVerifyFailure set a verification failure and returns lock status.
+func (v *CodeLimiterCacheImpl) SetMobileVerifyFailure(ctx context.Context, typ CodeType, sequence, mobile, countryCode string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
 	return v.evalFixedWindow(ctx, v.mobileFailureKey(typ, sequence, mobile, countryCode), maxAttempts, lockDuration)
 }
 
-// RecordEmailVerifyFailure records a verification failure and returns lock status.
-func (v *CodeLimiterCacheImpl) RecordEmailVerifyFailure(ctx context.Context, typ CodeType, sequence, email string,
+// SetEmailVerifyFailure set a verification failure and returns lock status.
+func (v *CodeLimiterCacheImpl) SetEmailVerifyFailure(ctx context.Context, typ CodeType, sequence, email string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
 	return v.evalFixedWindow(ctx, v.emailFailureKey(typ, sequence, email), maxAttempts, lockDuration)
 }
 
-// RecordEcdsaVerifyFailure records a verification failure and returns lock status.
-func (v *CodeLimiterCacheImpl) RecordEcdsaVerifyFailure(ctx context.Context, typ CodeType, sequence, chain, address string,
+// SetEcdsaVerifyFailure set a verification failure and returns lock status.
+func (v *CodeLimiterCacheImpl) SetEcdsaVerifyFailure(ctx context.Context, typ CodeType, sequence, chain, address string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
 	return v.evalFixedWindow(ctx, v.ecdsaFailureKey(typ, sequence, chain, address), maxAttempts, lockDuration)
 }
 
-// ClearMobileVerifyFailures clears the failure count.
-func (v *CodeLimiterCacheImpl) ClearMobileVerifyFailures(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error {
+// DeleteMobileVerifyFailures clears the failure count.
+func (v *CodeLimiterCacheImpl) DeleteMobileVerifyFailures(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error {
 	key := v.mobileFailureKey(typ, sequence, mobile, countryCode)
 	if err := v.client.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("failed to clear mobile verification failures: %w", err)
@@ -498,16 +498,16 @@ func (v *CodeLimiterCacheImpl) ClearMobileVerifyFailures(ctx context.Context, ty
 	return nil
 }
 
-// ClearEmailVerifyFailures clears the failure count.
-func (v *CodeLimiterCacheImpl) ClearEmailVerifyFailures(ctx context.Context, typ CodeType, sequence, email string) error {
+// DeleteEmailVerifyFailures clears the failure count.
+func (v *CodeLimiterCacheImpl) DeleteEmailVerifyFailures(ctx context.Context, typ CodeType, sequence, email string) error {
 	if err := v.client.Del(ctx, v.emailFailureKey(typ, sequence, email)).Err(); err != nil {
 		return fmt.Errorf("failed to clear email verification failures: %w", err)
 	}
 	return nil
 }
 
-// ClearEcdsaVerifyFailures clears the failure count.
-func (v *CodeLimiterCacheImpl) ClearEcdsaVerifyFailures(ctx context.Context, typ CodeType, sequence, chain,
+// DeleteEcdsaVerifyFailures clears the failure count.
+func (v *CodeLimiterCacheImpl) DeleteEcdsaVerifyFailures(ctx context.Context, typ CodeType, sequence, chain,
 	address string) error {
 	if err := v.client.Del(ctx, v.ecdsaFailureKey(typ, sequence, chain, address)).Err(); err != nil {
 		return fmt.Errorf("failed to clear ecdsa verification failures: %w", err)
