@@ -50,7 +50,7 @@ otpService := verification.NewOTPService(
 ```go
 sequence, err := otpService.SendMobileOTP(
     ctx,
-    verification.CodeTypeRegister,
+    "LOGIN",
     12345,           // userID
     "13800138000",
     "86",
@@ -59,10 +59,40 @@ if err != nil {
     // Handle errors
 }
 ```
-
 #### Sequence Diagram
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant OTPService
+    participant CodeLimiterCache
+    participant CodeGenerator
+    participant CodeCache
+    participant MobileCodeSender
 
-![SendMobileOTP](docs/SendMobileOTP-sequenceDiagram.png)
+    User->>OTPService: SendMobileOTP(typ, userID, mobile, country)
+    OTPService->>CodeLimiterCache: AllowSendMobile(typ, mobile, country, maxSendAttempts, sendWindow)
+    CodeLimiterCache-->>OTPService: LimitDecision{Allowed, ResetIn}
+
+    alt Allowed
+        OTPService->>CodeGenerator: NewMobileCode(typ, userID, mobile, country)
+        CodeGenerator-->>OTPService: MobileCode{Sequence, Code}
+        OTPService->>CodeCache: SetMobileCode(code, ttl)
+        CodeCache-->>OTPService: OK
+        OTPService->>MobileCodeSender: Send(ctx, code)
+        alt Success
+            MobileCodeSender-->>OTPService: OK
+            OTPService-->>User: return Sequence
+        else Failure
+            MobileCodeSender-->>OTPService: error
+            OTPService->>CodeCache: DeleteMobileCode(typ, seq, mobile, country)
+            CodeCache-->>OTPService: OK
+            OTPService-->>User: error
+        end
+    else RateLimited
+        OTPService-->>User: ErrMobileSendLimitExceeded
+    end
+```
 
 ### 3. Verify Code
 
@@ -81,9 +111,40 @@ if err != nil {
 ```
 
 #### Sequence Diagram
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant OTPService
+    participant CodeLimiterCache
+    participant CodeCache
 
-![VerifyMobileOTP](docs/VerifyMobileOTP-sequenceDiagram.png)
+    User->>OTPService: VerifyMobileOTP(typ, sequence, mobile, country, input)
+    OTPService->>CodeLimiterCache: GetVerifyMobileCount(typ, sequence, mobile, country)
+    CodeLimiterCache-->>OTPService: count
 
+    alt count >= maxVerifyFailures
+        OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
+        CodeCache-->>OTPService: OK
+        OTPService->>CodeLimiterCache: DeleteMobileVerifyFailures(typ, sequence, mobile, country)
+        CodeLimiterCache-->>OTPService: OK
+        OTPService-->>User: ErrMobileVerifyLimitExceeded
+    else count < maxVerifyFailures
+        OTPService->>CodeCache: PeekMobileCode(typ, sequence, mobile, country)
+        CodeCache-->>OTPService: stored
+        alt input != stored.Code
+            OTPService->>CodeLimiterCache: SetMobileVerifyFailure(typ, sequence, mobile, country, maxFailures, verifyWindow)
+            CodeLimiterCache-->>OTPService: {Count, ResetIn}
+            OTPService-->>User: ErrCodeIncorrect
+        else input == stored.Code
+            OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
+            CodeCache-->>OTPService: OK
+            OTPService->>CodeLimiterCache: DeleteMobileVerifyFailures(typ, sequence, mobile, country)
+            CodeLimiterCache-->>OTPService: OK
+            OTPService-->>User: OK
+        end
+    end
+```
 ## Configuration Options
 
 | Option               | Default      | Description                       |

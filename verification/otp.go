@@ -99,7 +99,7 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 	ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string,
 ) error {
 	// Rate limiting check
-	cnt, err := s.limiterCache.GetVerifyMobileCount(ctx, typ, sequence, mobile, countryCode)
+	cnt, err := s.limiterCache.GetMobileCodeIncorrectCount(ctx, typ, sequence, mobile, countryCode)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 		// Exceeded max attempts, delete the code to prevent further tries
 		// and clear the failure count
 		_ = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode)
-		_ = s.limiterCache.DeleteMobileVerifyFailures(ctx, typ, sequence, mobile, countryCode)
+		_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
 		return ErrMobileVerifyLimitExceeded
 	}
 	// Non-destructive read
@@ -117,7 +117,7 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 	}
 
 	if stored.Code.Code != input {
-		_, _ = s.limiterCache.SetMobileVerifyFailure(ctx, typ, sequence, mobile, countryCode,
+		_, _ = s.limiterCache.IncrementMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode,
 			s.maxVerifyFailures, s.verifyWindowDuration)
 		return ErrCodeIncorrect
 	}
@@ -126,6 +126,6 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 		return err
 	}
 	// Clear verify failure count on success
-	_ = s.limiterCache.DeleteMobileVerifyFailures(ctx, typ, sequence, mobile, countryCode)
+	_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
 	return nil
 }
