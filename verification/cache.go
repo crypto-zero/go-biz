@@ -323,18 +323,18 @@ type CodeLimiterCache interface {
 	// GetEcdsaCodeIncorrectCount get the current count of ecdsa verification attempts.
 	GetEcdsaCodeIncorrectCount(ctx context.Context, typ CodeType, sequence, chain, address string) (int64, error)
 
-	// IncrementMobileCodeIncorrect increment a verification failure and returns lock status
+	// IncrementMobileCodeIncorrect increment a verification incorrect and returns lock status
 	IncrementMobileCodeIncorrect(ctx context.Context, typ CodeType, sequence, mobile, countryCode string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
-	// IncrementEmailCodeIncorrect increment a verification failure and returns lock status
+	// IncrementEmailCodeIncorrect increment a verification incorrect and returns lock status
 	IncrementEmailCodeIncorrect(ctx context.Context, typ CodeType, sequence, email string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
-	// IncrementEcdsaCodeIncorrect increment a verification failure and returns lock status
+	// IncrementEcdsaCodeIncorrect increment a verification incorrect and returns lock status
 	IncrementEcdsaCodeIncorrect(ctx context.Context, typ CodeType, sequence, chain, address string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
 
-	// DeleteMobileCodeIncorrect deletes the failure count (call on successful verification)
+	// DeleteMobileCodeIncorrect deletes the incorrect count (call on successful verification)
 	DeleteMobileCodeIncorrect(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error
-	// DeleteEmailCodeIncorrect deletes the failure count (call on successful verification)
+	// DeleteEmailCodeIncorrect deletes the incorrect count (call on successful verification)
 	DeleteEmailCodeIncorrect(ctx context.Context, typ CodeType, sequence, email string) error
-	// DeleteEcdsaCodeIncorrect deletes the failure count (call on successful verification)
+	// DeleteEcdsaCodeIncorrect deletes the incorrect count (call on successful verification)
 	DeleteEcdsaCodeIncorrect(ctx context.Context, typ CodeType, sequence, chain, address string) error
 }
 
@@ -387,18 +387,18 @@ func (v *CodeLimiterCacheImpl) buildKey(category, medium string, parts ...string
 	return strings.Join(allParts, ":")
 }
 
-// mobileFailureKey constructs the Redis key for mobile verification failure tracking.
-func (v *CodeLimiterCacheImpl) mobileFailureKey(typ CodeType, sequence, mobile, countryCode string) string {
+// mobileIncorrectKey constructs the Redis key for mobile verification incorrect tracking.
+func (v *CodeLimiterCacheImpl) mobileIncorrectKey(typ CodeType, sequence, mobile, countryCode string) string {
 	return v.buildKey("VERIFICATION_FAILURE", "MOBILE", strings.ToUpper(string(typ)), sequence, mobile, countryCode)
 }
 
-// emailFailureKey constructs the Redis key for email verification failure tracking.
-func (v *CodeLimiterCacheImpl) emailFailureKey(typ CodeType, sequence, email string) string {
+// emailIncorrectKey constructs the Redis key for email verification incorrect tracking.
+func (v *CodeLimiterCacheImpl) emailIncorrectKey(typ CodeType, sequence, email string) string {
 	return v.buildKey("VERIFICATION_FAILURE", "EMAIL", strings.ToUpper(string(typ)), sequence, email)
 }
 
-// ecdsaFailureKey constructs the Redis key for ecdsa verification failure tracking.
-func (v *CodeLimiterCacheImpl) ecdsaFailureKey(typ CodeType, sequence, chain, address string) string {
+// ecdsaIncorrectKey constructs the Redis key for ecdsa verification incorrect tracking.
+func (v *CodeLimiterCacheImpl) ecdsaIncorrectKey(typ CodeType, sequence, chain, address string) string {
 	return v.buildKey("VERIFICATION_FAILURE", "ECDSA", strings.ToUpper(string(typ)), sequence, chain, address)
 }
 
@@ -437,80 +437,80 @@ func (v *CodeLimiterCacheImpl) AllowSendEcdsa(ctx context.Context, typ CodeType,
 
 // GetMobileCodeIncorrectCount gets the current count of mobile verification attempts.
 func (v *CodeLimiterCacheImpl) GetMobileCodeIncorrectCount(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) (int64, error) {
-	cnt, err := v.client.Get(ctx, v.mobileFailureKey(typ, sequence, mobile, countryCode)).Int64()
+	cnt, err := v.client.Get(ctx, v.mobileIncorrectKey(typ, sequence, mobile, countryCode)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to get mobile verification failure count: %w", err)
+		return 0, fmt.Errorf("failed to get mobile verification incorrect count: %w", err)
 	}
 	return cnt, nil
 }
 
 // GetEmailCodeIncorrectCount gets the current count of email verification attempts.
 func (v *CodeLimiterCacheImpl) GetEmailCodeIncorrectCount(ctx context.Context, typ CodeType, sequence, email string) (int64, error) {
-	cnt, err := v.client.Get(ctx, v.emailFailureKey(typ, sequence, email)).Int64()
+	cnt, err := v.client.Get(ctx, v.emailIncorrectKey(typ, sequence, email)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to get email verification failure count: %w", err)
+		return 0, fmt.Errorf("failed to get email verification incorrect count: %w", err)
 	}
 	return cnt, nil
 }
 
 // GetEcdsaCodeIncorrectCount gets the current count of ecdsa verification attempts.
 func (v *CodeLimiterCacheImpl) GetEcdsaCodeIncorrectCount(ctx context.Context, typ CodeType, sequence, chain, address string) (int64, error) {
-	cnt, err := v.client.Get(ctx, v.ecdsaFailureKey(typ, sequence, chain, address)).Int64()
+	cnt, err := v.client.Get(ctx, v.ecdsaIncorrectKey(typ, sequence, chain, address)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to get ecdsa verification failure count: %w", err)
+		return 0, fmt.Errorf("failed to get ecdsa verification incorrect count: %w", err)
 	}
 	return cnt, nil
 }
 
-// IncrementMobileCodeIncorrect set a verification failure and returns lock status.
+// IncrementMobileCodeIncorrect set a verification incorrect and returns lock status.
 func (v *CodeLimiterCacheImpl) IncrementMobileCodeIncorrect(ctx context.Context, typ CodeType, sequence, mobile, countryCode string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.mobileFailureKey(typ, sequence, mobile, countryCode), maxAttempts, lockDuration)
+	return v.evalFixedWindow(ctx, v.mobileIncorrectKey(typ, sequence, mobile, countryCode), maxAttempts, lockDuration)
 }
 
-// IncrementEmailCodeIncorrect set a verification failure and returns lock status.
+// IncrementEmailCodeIncorrect set a verification incorrect and returns lock status.
 func (v *CodeLimiterCacheImpl) IncrementEmailCodeIncorrect(ctx context.Context, typ CodeType, sequence, email string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.emailFailureKey(typ, sequence, email), maxAttempts, lockDuration)
+	return v.evalFixedWindow(ctx, v.emailIncorrectKey(typ, sequence, email), maxAttempts, lockDuration)
 }
 
-// IncrementEcdsaCodeIncorrect set a verification failure and returns lock status.
+// IncrementEcdsaCodeIncorrect set a verification incorrect and returns lock status.
 func (v *CodeLimiterCacheImpl) IncrementEcdsaCodeIncorrect(ctx context.Context, typ CodeType, sequence, chain, address string,
 	maxAttempts int64, lockDuration time.Duration) (*LimitDecision, error) {
-	return v.evalFixedWindow(ctx, v.ecdsaFailureKey(typ, sequence, chain, address), maxAttempts, lockDuration)
+	return v.evalFixedWindow(ctx, v.ecdsaIncorrectKey(typ, sequence, chain, address), maxAttempts, lockDuration)
 }
 
-// DeleteMobileCodeIncorrect clears the failure count.
+// DeleteMobileCodeIncorrect clears the incorrect count.
 func (v *CodeLimiterCacheImpl) DeleteMobileCodeIncorrect(ctx context.Context, typ CodeType, sequence, mobile, countryCode string) error {
-	key := v.mobileFailureKey(typ, sequence, mobile, countryCode)
+	key := v.mobileIncorrectKey(typ, sequence, mobile, countryCode)
 	if err := v.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("failed to clear mobile verification failures: %w", err)
+		return fmt.Errorf("failed to clear mobile verification incorrect: %w", err)
 	}
 	return nil
 }
 
-// DeleteEmailCodeIncorrect clears the failure count.
+// DeleteEmailCodeIncorrect clears the incorrect count.
 func (v *CodeLimiterCacheImpl) DeleteEmailCodeIncorrect(ctx context.Context, typ CodeType, sequence, email string) error {
-	if err := v.client.Del(ctx, v.emailFailureKey(typ, sequence, email)).Err(); err != nil {
-		return fmt.Errorf("failed to clear email verification failures: %w", err)
+	if err := v.client.Del(ctx, v.emailIncorrectKey(typ, sequence, email)).Err(); err != nil {
+		return fmt.Errorf("failed to clear email verification incorrect: %w", err)
 	}
 	return nil
 }
 
-// DeleteEcdsaCodeIncorrect clears the failure count.
+// DeleteEcdsaCodeIncorrect clears the incorrect count.
 func (v *CodeLimiterCacheImpl) DeleteEcdsaCodeIncorrect(ctx context.Context, typ CodeType, sequence, chain,
 	address string) error {
-	if err := v.client.Del(ctx, v.ecdsaFailureKey(typ, sequence, chain, address)).Err(); err != nil {
-		return fmt.Errorf("failed to clear ecdsa verification failures: %w", err)
+	if err := v.client.Del(ctx, v.ecdsaIncorrectKey(typ, sequence, chain, address)).Err(); err != nil {
+		return fmt.Errorf("failed to clear ecdsa verification incorrect: %w", err)
 	}
 	return nil
 }

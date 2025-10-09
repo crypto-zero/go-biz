@@ -23,7 +23,7 @@ type OTPServiceImpl struct {
 	ttl                  time.Duration // e.g., 5 * time.Minute
 	maxSendAttempts      int64         // max send attempts within sendWindowDuration
 	sendWindowDuration   time.Duration // e.g., 1 hour
-	maxVerifyFailures    int64         // max verify attempts within verifyWindowDuration
+	maxVerifyIncorrect   int64         // max verify attempts within verifyWindowDuration
 	verifyWindowDuration time.Duration // e.g., 1 hour
 }
 
@@ -33,7 +33,7 @@ type OTPServiceImpl struct {
 func NewOTPService(
 	cache CodeCache, limiterCache CodeLimiterCache, sender MobileCodeSender,
 	gen CodeGenerator, sendWindowDuration, verifyWindowDuration, ttl time.Duration,
-	maxSendAttempts, maxVerifyFailures int64,
+	maxSendAttempts, maxVerifyIncorrect int64,
 ) *OTPServiceImpl {
 	return &OTPServiceImpl{
 		cache:                cache,
@@ -43,7 +43,7 @@ func NewOTPService(
 		ttl:                  ttl,
 		maxSendAttempts:      maxSendAttempts,      // max send attempts within sendWindowDuration
 		sendWindowDuration:   sendWindowDuration,   // e.g., 1 hour
-		maxVerifyFailures:    maxVerifyFailures,    // max verify attempts within verifyWindowDuration
+		maxVerifyIncorrect:   maxVerifyIncorrect,   // max verify attempts within verifyWindowDuration
 		verifyWindowDuration: verifyWindowDuration, // e.g., 1 hour
 	}
 }
@@ -103,9 +103,9 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 	if err != nil {
 		return err
 	}
-	if cnt >= s.maxVerifyFailures {
+	if cnt >= s.maxVerifyIncorrect {
 		// Exceeded max attempts, delete the code to prevent further tries
-		// and clear the failure count
+		// and clear the incorrect count
 		_ = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode)
 		_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
 		return ErrMobileVerifyLimitExceeded
@@ -118,14 +118,14 @@ func (s *OTPServiceImpl) VerifyMobileOTP(
 
 	if stored.Code.Code != input {
 		_, _ = s.limiterCache.IncrementMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode,
-			s.maxVerifyFailures, s.verifyWindowDuration)
+			s.maxVerifyIncorrect, s.verifyWindowDuration)
 		return ErrCodeIncorrect
 	}
 	// Delete after successful verification (one-time code)
 	if err = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode); err != nil {
 		return err
 	}
-	// Clear verify failure count on success
+	// Clear verify incorrect count on success
 	_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
 	return nil
 }

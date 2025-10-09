@@ -41,7 +41,7 @@ otpService := verification.NewOTPService(
     10*time.Minute,    // verifyWindowDuration
     5*time.Minute,     // ttl
     3,                 // maxSendAttempts
-    3,                 // maxVerifyFailures
+    3,                 // maxVerifyIncorrect
 )
 ```
 
@@ -83,7 +83,7 @@ sequenceDiagram
         alt Success
             MobileCodeSender-->>OTPService: OK
             OTPService-->>User: return Sequence
-        else Failure
+        else Incorrect
             MobileCodeSender-->>OTPService: error
             OTPService->>CodeCache: DeleteMobileCode(typ, seq, mobile, country)
             CodeCache-->>OTPService: OK
@@ -120,26 +120,26 @@ sequenceDiagram
     participant CodeCache
 
     User->>OTPService: VerifyMobileOTP(typ, sequence, mobile, country, input)
-    OTPService->>CodeLimiterCache: GetVerifyMobileCount(typ, sequence, mobile, country)
+    OTPService->>CodeLimiterCache: GetMobileCodeIncorrectCount(typ, sequence, mobile, country)
     CodeLimiterCache-->>OTPService: count
 
-    alt count >= maxVerifyFailures
+    alt count >= maxVerifyIncorrect
         OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
         CodeCache-->>OTPService: OK
-        OTPService->>CodeLimiterCache: DeleteMobileVerifyFailures(typ, sequence, mobile, country)
+        OTPService->>CodeLimiterCache: DeleteMobileCodeIncorrect(typ, sequence, mobile, country)
         CodeLimiterCache-->>OTPService: OK
         OTPService-->>User: ErrMobileVerifyLimitExceeded
-    else count < maxVerifyFailures
+    else count < maxVerifyIncorrect
         OTPService->>CodeCache: PeekMobileCode(typ, sequence, mobile, country)
         CodeCache-->>OTPService: stored
         alt input != stored.Code
-            OTPService->>CodeLimiterCache: SetMobileVerifyFailure(typ, sequence, mobile, country, maxFailures, verifyWindow)
+            OTPService->>CodeLimiterCache: IncrementMobileCodeIncorrect(typ, sequence, mobile, country, maxIncorrect, verifyWindow)
             CodeLimiterCache-->>OTPService: {Count, ResetIn}
             OTPService-->>User: ErrCodeIncorrect
         else input == stored.Code
             OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
             CodeCache-->>OTPService: OK
-            OTPService->>CodeLimiterCache: DeleteMobileVerifyFailures(typ, sequence, mobile, country)
+            OTPService->>CodeLimiterCache: DeleteMobileCodeIncorrect(typ, sequence, mobile, country)
             CodeLimiterCache-->>OTPService: OK
             OTPService-->>User: OK
         end
@@ -147,26 +147,26 @@ sequenceDiagram
 ```
 ## Configuration Options
 
-| Option               | Default      | Description                       |
-|----------------------|--------------|-----------------------------------|
-| RedisClient          | Required     | Redis client instance             |
-| TTL                  | 5 minutes    | Code validity period              |
-| MobileCodeLength     | 6            | Mobile code length                |
-| EmailCodeLength      | 6            | Email code length                 |
-| EcdsaCodeLength      | 32           | ECDSA signature length            |
-| MaxVerifyFailures    | 3            | Max verification failures         |
-| VerifyWindowDuration | 10 minutes   | Verification failure count window |
+| Option                | Default      | Description                         |
+|-----------------------|--------------|-------------------------------------|
+| RedisClient           | Required     | Redis client instance               |
+| TTL                   | 5 minutes    | Code validity period                |
+| MobileCodeLength      | 6            | Mobile code length                  |
+| EmailCodeLength       | 6            | Email code length                   |
+| EcdsaCodeLength       | 32           | ECDSA signature length              |
+| MaxVerifyIncorrect    | 3            | Max verification incorrect          |
+| VerifyWindowDuration  | 10 minutes   | Verification incorrect count window |
 
 ## Error Handling
 
-| Error                              | Description                       |
-|------------------------------------|-----------------------------------|
-| ErrMobileSendLimitExceeded         | Send rate limit exceeded          |
-| ErrEmailSendLimitExceeded          | Email send limit exceeded         |
-| ErrMobileVerifyLimitExceeded       | Verification failure limit        |
-| ErrEmailVerifyLimitExceeded        | Email verification failure limit  |
-| ErrCodeIncorrect                   | Incorrect code                    |
-| ErrCodeNotFound                    | Code not found or expired         |
+| Error                              | Description                        |
+|------------------------------------|------------------------------------|
+| ErrMobileSendLimitExceeded         | Send rate limit exceeded           |
+| ErrEmailSendLimitExceeded          | Email send limit exceeded          |
+| ErrMobileVerifyLimitExceeded       | Verification incorrect limit       |
+| ErrEmailVerifyLimitExceeded        | Email verification incorrect limit |
+| ErrCodeIncorrect                   | Incorrect code                     |
+| ErrCodeNotFound                    | Code not found or expired          |
 
 ## SMS/Email Integration
 
@@ -214,7 +214,7 @@ otpService := verification.NewOTPService(
     10*time.Minute,    // verifyWindowDuration
     5*time.Minute,     // ttl
     3,                 // maxSendAttempts
-    3,                 // maxVerifyFailures
+    3,                 // maxVerifyIncorrect
 )
 ```
 
