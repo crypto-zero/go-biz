@@ -12,7 +12,7 @@ A Go package for handling OTP (One-Time Password) verification codes, supporting
 ## Installation
 
 ```bash
-go get github.com//go-biz/verification
+go get github.com/crypto-zero/go-biz/verification
 ```
 
 ## Quick Start
