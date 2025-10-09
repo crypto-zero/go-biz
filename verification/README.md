@@ -12,7 +12,7 @@ A Go package for handling OTP (One-Time Password) verification codes, supporting
 ## Installation
 
 ```bash
-go get github.com/Paratrix-xyz/go-biz/verification
+go get github.com//go-biz/verification
 ```
 
 ## Quick Start
@@ -21,7 +21,7 @@ go get github.com/Paratrix-xyz/go-biz/verification
 
 ```go
 import (
-    "github.com/Paratrix-xyz/go-biz/verification"
+    "github.com/crypto-zero/go-biz/verification"
     "github.com/redis/go-redis/v9"
     "time"
 )
@@ -113,8 +113,8 @@ Implement the sender interface or use the built-in Aliyun SMS integration:
 
 ```go
 import (
-    "github.com/Paratrix-xyz/go-biz/verification"
-    "github.com/Paratrix-xyz/go-biz/verification/aliyun"
+    "github.com/crypto-zero/go-biz/verification"
+    "github.com/crypto-zero/go-biz/verification/aliyun"
     dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
     "context"
     "time"
