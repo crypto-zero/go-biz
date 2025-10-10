@@ -14,25 +14,27 @@ var (
 	ErrTemplateNotFound = errors.New("template not found")
 )
 
+type TemplateMapper map[verification.CodeType]*Template
+
 // SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
 type SMS struct {
 	mainlandClient *dysms.Client
-	template       map[verification.CodeType]*Template
+	template       TemplateMapper
 }
 
 // Template represents an SMS template with code and sign.
 type Template struct {
-	TaskID       string // Optional: used for global SMS
-	Code         string // Template code
-	SignName     string // Sign name
-	ParamsFormat string // JSON format string for template parameters, e.g., `{"code":"%s"}`
+	TaskID       string `json:"task_id"`       // Optional: used for global SMS
+	Code         string `json:"code"`          // Template code
+	SignName     string `json:"sign_name"`     // Sign name
+	ParamsFormat string `json:"params_format"` // JSON format string for template parameters, e.g., `{"code":"%s"}`
 }
 
 // Compile-time assertion: AliyunSMS implements MobileCodeSender.
 var _ verification.MobileCodeSender = (*SMS)(nil)
 
 // NewSMS creates a new AliyunSMS with the given Dysms client.
-func NewSMS(client *dysms.Client, template map[verification.CodeType]*Template) *SMS {
+func NewSMS(client *dysms.Client, template TemplateMapper) *SMS {
 	return &SMS{
 		mainlandClient: client,
 		template:       template,
