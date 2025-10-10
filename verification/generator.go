@@ -84,6 +84,11 @@ type CodeGenerator interface {
 
 type defaultCodeGenerator struct{ CodeFactory }
 
+// NewDefaultCodeGenerator returns a CodeGenerator using the provided CodeFactory.
+func NewDefaultCodeGenerator(factory CodeFactory) CodeGenerator {
+	return &defaultCodeGenerator{CodeFactory: factory}
+}
+
 // Compile-time assertions: generators implement CodeGenerator.
 var _ CodeGenerator = (*defaultCodeGenerator)(nil)
 
