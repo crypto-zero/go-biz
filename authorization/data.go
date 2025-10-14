@@ -70,11 +70,11 @@ func (s SessionCacheImpl) SetUserSessionID(ctx context.Context, sessionID string
 	return nil
 }
 
-func (s SessionCacheImpl) DelUserSession(ctx context.Context, userID int64) error {
+func (s SessionCacheImpl) DeleteUserSession(ctx context.Context, userID int64) error {
 	mapKey := s.userSessionMapKey(userID)
 	sessionIDs, err := s.client.HKeys(ctx, mapKey).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("get user session ids failed: %w", err)
+		return fmt.Errorf("get user session id list failed: %w", err)
 	}
 	pipe := s.client.Pipeline()
 	for _, sessionID := range sessionIDs {
@@ -84,7 +84,7 @@ func (s SessionCacheImpl) DelUserSession(ctx context.Context, userID int64) erro
 	pipe.Del(ctx, mapKey)
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		return fmt.Errorf("delete user session ids failed: %w", err)
+		return fmt.Errorf("delete user session id list failed: %w", err)
 	}
 	return nil
 }
