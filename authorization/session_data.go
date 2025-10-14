@@ -70,6 +70,20 @@ func (s SessionCacheImpl) SetUserSessionID(ctx context.Context, sessionID string
 	return nil
 }
 
+func (s SessionCacheImpl) DelUserSessionID(ctx context.Context, sessionID string, userID int64) error {
+	key := s.userSessionKey(sessionID)
+	mapKey := s.userSessionMapKey(userID)
+	_, err := s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, key)
+		pipe.HDel(ctx, mapKey, sessionID)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("delete user session id failed: %w", err)
+	}
+	return nil
+}
+
 func (s SessionCacheImpl) GetUserIDBySessionID(ctx context.Context, sessionID string,
 	expire time.Duration,
 ) (userID int64, err error) {
