@@ -33,6 +33,8 @@ type SessionCache interface {
 	SetUserSessionID(ctx context.Context, sessionID string, userID int64, expire time.Duration) error
 	// GetUserIDBySessionID gets the user id by session id and refresh the session id expire time.
 	GetUserIDBySessionID(ctx context.Context, sessionID string, expire time.Duration) (int64, error)
+	// DelUserSessionID deletes the user session id.
+	DelUserSessionID(ctx context.Context, sessionID string, userID int64) error
 }
 
 // FixedSessionIDGenerator The fixed session id generator
