@@ -59,7 +59,9 @@ if err != nil {
     // Handle errors
 }
 ```
-#### Sequence Diagram
+
+#### Send Sequence Diagram
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -110,7 +112,8 @@ if err != nil {
 }
 ```
 
-#### Sequence Diagram
+#### Verify Sequence Diagram
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -145,6 +148,7 @@ sequenceDiagram
         end
     end
 ```
+
 ## Configuration Options
 
 | Option                | Default      | Description                         |

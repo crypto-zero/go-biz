@@ -3,201 +3,129 @@ package verification
 import (
 	"context"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // OTPService provides methods to send and verify OTP codes.
 type OTPService interface {
-	// SendMobileOTP sends a mobile OTP code and returns the sequence.
 	SendMobileOTP(ctx context.Context, typ CodeType, userID int64, mobile, countryCode string) (string, error)
-	// VerifyMobileOTP verifies the mobile OTP code.
 	VerifyMobileOTP(ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string) error
-	// SendEmailOTP sends an email OTP code and returns the sequence.
 	SendEmailOTP(ctx context.Context, typ CodeType, userID int64, email string) (string, error)
-	// VerifyEmailOTP verifies the email OTP code.
 	VerifyEmailOTP(ctx context.Context, typ CodeType, sequence, email, input string) error
+	SendEcdsaOTP(ctx context.Context, typ CodeType, userID int64, chain, address string) (string, error)
+	VerifyEcdsaOTP(ctx context.Context, typ CodeType, sequence, chain, address, input string) error
 }
 
 // OTPServiceImpl encapsulates sending and verifying OTP codes.
 type OTPServiceImpl struct {
-	cache        CodeCache
-	smsSender    MobileCodeSender
-	emailSender  EmailCodeSender
-	generator    CodeGenerator
-	limiterCache CodeLimiterCache
+	mobileStore CodeStore[MobileCode]
+	emailStore  CodeStore[EmailCode]
+	ecdsaStore  CodeStore[EcdsaCode]
+	limiter     CodeLimiter
+	keys        *CacheKeyBuilder
+	smsSender   MobileCodeSender
+	emailSender EmailCodeSender
+	generator   CodeGenerator
 	// Policy
-	ttl                  time.Duration // e.g., 5 * time.Minute
-	maxSendAttempts      int64         // max send attempts within sendWindowDuration
-	sendWindowDuration   time.Duration // e.g., 1 hour
-	maxVerifyIncorrect   int64         // max verify attempts within verifyWindowDuration
-	verifyWindowDuration time.Duration // e.g., 1 hour
+	ttl                  time.Duration
+	maxSendAttempts      int64
+	sendWindowDuration   time.Duration
+	maxVerifyIncorrect   int64
+	verifyWindowDuration time.Duration
 }
 
-// NewOTPService returns a configured OTPServiceImpl.
-// It keeps internal fields unexported while providing a simple constructor
-// for external packages to initialize the service.
+var _ OTPService = (*OTPServiceImpl)(nil)
+
+// OTPConfig groups the policy/configuration for OTPService.
+type OTPConfig struct {
+	Prefix             CodeCacheKeyPrefix
+	TTL                time.Duration // code expiration time
+	MaxSendAttempts    int64         // max sends per window per identifier
+	SendWindow         time.Duration // send rate-limit window
+	MaxVerifyIncorrect int64         // max wrong attempts before lockout
+	VerifyWindow       time.Duration // verify rate-limit window
+}
+
+// NewOTPService creates an OTPService.
+//
+// Use NewCodeGenerator(codeLength) for production, or NewTestCodeGenerator(code) for testing.
 func NewOTPService(
-	cache CodeCache, limiterCache CodeLimiterCache,
+	cfg OTPConfig, client redis.UniversalClient,
 	smsSender MobileCodeSender, emailSender EmailCodeSender,
-	gen CodeGenerator, sendWindowDuration, verifyWindowDuration, ttl time.Duration,
-	maxSendAttempts, maxVerifyIncorrect int64,
-) *OTPServiceImpl {
+	gen CodeGenerator,
+) OTPService {
 	return &OTPServiceImpl{
-		cache:                cache,
+		mobileStore:          NewRedisCodeStore[MobileCode](client),
+		emailStore:           NewRedisCodeStore[EmailCode](client),
+		ecdsaStore:           NewRedisCodeStore[EcdsaCode](client),
+		limiter:              NewRedisCodeLimiter(client),
+		keys:                 NewCacheKeyBuilder(cfg.Prefix),
 		smsSender:            smsSender,
 		emailSender:          emailSender,
 		generator:            gen,
-		limiterCache:         limiterCache,
-		ttl:                  ttl,
-		maxSendAttempts:      maxSendAttempts,      // max send attempts within sendWindowDuration
-		sendWindowDuration:   sendWindowDuration,   // e.g., 1 hour
-		maxVerifyIncorrect:   maxVerifyIncorrect,   // max verify attempts within verifyWindowDuration
-		verifyWindowDuration: verifyWindowDuration, // e.g., 1 hour
+		ttl:                  cfg.TTL,
+		maxSendAttempts:      cfg.MaxSendAttempts,
+		sendWindowDuration:   cfg.SendWindow,
+		maxVerifyIncorrect:   cfg.MaxVerifyIncorrect,
+		verifyWindowDuration: cfg.VerifyWindow,
 	}
 }
 
-// NewStaticOTPService returns a service that generates the fixed test code ("666666").
-func NewStaticOTPService(cache CodeCache, limiterCache CodeLimiterCache,
-	smsSender MobileCodeSender, emailSender EmailCodeSender,
-	sendWindowDuration, verifyWindowDuration, ttl time.Duration,
-	sendAttempts, verifyAttempts int64) *OTPServiceImpl {
-	return NewOTPService(cache, limiterCache, smsSender, emailSender, DefaultCodeGenerator,
-		sendWindowDuration, verifyWindowDuration, ttl, sendAttempts, verifyAttempts)
-}
+// ============================================================================
+// Send methods — all delegate to the generic sendCode[T] function
+// ============================================================================
 
-// NewFourDigitOPTService returns a service that generates a random code, defaulting to 4 digits.
-// It uses the FourDigitCodeGenerator.
-func NewFourDigitOPTService(cache CodeCache, limiterCache CodeLimiterCache,
-	smsSender MobileCodeSender, emailSender EmailCodeSender,
-	sendWindowDuration, verifyWindowDuration, ttl time.Duration,
-	sendAttempts, verifyAttempts int64) *OTPServiceImpl {
-	return NewOTPService(cache, limiterCache, smsSender, emailSender, FourDigitCodeGenerator,
-		sendWindowDuration, verifyWindowDuration, ttl, sendAttempts, verifyAttempts)
-}
-
-// SendMobileOTP generates a code, stores it, sends SMS, and returns the sequence.
-func (s *OTPServiceImpl) SendMobileOTP(
-	ctx context.Context, typ CodeType, userID int64, mobile, countryCode string,
-) (string, error) {
-	// Rate limiting check
-	allowMobile, err := s.limiterCache.AllowSendMobile(ctx, typ, mobile, countryCode,
-		s.maxSendAttempts, s.sendWindowDuration)
-	if err != nil {
-		return "", err
-	}
-	if !allowMobile.Allowed {
-		return "", ErrMobileSendLimitExceeded
-	}
-
+func (s *OTPServiceImpl) SendMobileOTP(ctx context.Context, typ CodeType, userID int64, mobile, countryCode string) (string, error) {
 	mc, err := s.generator.NewMobileCode(ctx, typ, userID, mobile, countryCode)
 	if err != nil {
 		return "", err
 	}
-	if err = s.cache.SetMobileCode(ctx, mc, s.ttl); err != nil {
-		return "", err
-	}
-	if err = s.smsSender.Send(ctx, mc); err != nil {
-		_ = s.cache.DeleteMobileCode(ctx, typ, mc.Sequence, mobile, countryCode)
-		return "", err
-	}
-	return mc.Sequence, nil
+	return sendCode(ctx, s.mobileStore, s.limiter, s.keys, mc,
+		s.ttl, s.maxSendAttempts, s.sendWindowDuration, ErrMobileSendLimitExceeded,
+		func() error { return s.smsSender.Send(ctx, mc) })
 }
 
-// VerifyMobileOTP verifies the mobile OTP code.
-func (s *OTPServiceImpl) VerifyMobileOTP(
-	ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string,
-) error {
-	// Rate limiting check
-	cnt, err := s.limiterCache.GetMobileCodeIncorrectCount(ctx, typ, sequence, mobile, countryCode)
-	if err != nil {
-		return err
-	}
-	if cnt >= s.maxVerifyIncorrect {
-		// Exceeded max attempts, delete the code to prevent further tries
-		// and clear the incorrect count
-		_ = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode)
-		_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
-		return ErrMobileVerifyLimitExceeded
-	}
-	// Non-destructive read
-	stored, err := s.cache.PeekMobileCode(ctx, typ, sequence, mobile, countryCode)
-	if err != nil {
-		return err
-	}
-
-	if stored.Code.Code != input {
-		_, _ = s.limiterCache.IncrementMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode,
-			s.maxVerifyIncorrect, s.verifyWindowDuration)
-		return ErrCodeIncorrect
-	}
-	// Delete after successful verification (one-time code)
-	if err = s.cache.DeleteMobileCode(ctx, typ, sequence, mobile, countryCode); err != nil {
-		return err
-	}
-	// Clear verify incorrect count on success
-	_ = s.limiterCache.DeleteMobileCodeIncorrect(ctx, typ, sequence, mobile, countryCode)
-	return nil
-}
-
-// SendEmailOTP generates a code, stores it, sends email, and returns the sequence.
-func (s *OTPServiceImpl) SendEmailOTP(
-	ctx context.Context, typ CodeType, userID int64, email string,
-) (string, error) {
-	// Rate limiting check
-	allowEmail, err := s.limiterCache.AllowSendEmail(ctx, typ, email,
-		s.maxSendAttempts, s.sendWindowDuration)
-	if err != nil {
-		return "", err
-	}
-	if !allowEmail.Allowed {
-		return "", ErrEmailSendLimitExceeded
-	}
-
+func (s *OTPServiceImpl) SendEmailOTP(ctx context.Context, typ CodeType, userID int64, email string) (string, error) {
 	ec, err := s.generator.NewEmailCode(ctx, typ, userID, email)
 	if err != nil {
 		return "", err
 	}
-	if err = s.cache.SetEmailCode(ctx, ec, s.ttl); err != nil {
-		return "", err
-	}
-	if err = s.emailSender.Send(ctx, ec); err != nil {
-		_ = s.cache.DeleteEmailCode(ctx, typ, ec.Sequence, email)
-		return "", err
-	}
-	return ec.Sequence, nil
+	return sendCode(ctx, s.emailStore, s.limiter, s.keys, ec,
+		s.ttl, s.maxSendAttempts, s.sendWindowDuration, ErrEmailSendLimitExceeded,
+		func() error { return s.emailSender.Send(ctx, ec) })
 }
 
-// VerifyEmailOTP verifies the email OTP code.
-func (s *OTPServiceImpl) VerifyEmailOTP(
-	ctx context.Context, typ CodeType, sequence, email, input string,
-) error {
-	// Rate limiting check
-	cnt, err := s.limiterCache.GetEmailCodeIncorrectCount(ctx, typ, sequence, email)
+func (s *OTPServiceImpl) SendEcdsaOTP(ctx context.Context, typ CodeType, userID int64, chain, address string) (string, error) {
+	ec, err := s.generator.NewEcdsaCode(ctx, typ, userID, chain, address)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if cnt >= s.maxVerifyIncorrect {
-		// Exceeded max attempts, delete the code to prevent further tries
-		// and clear the incorrect count
-		_ = s.cache.DeleteEmailCode(ctx, typ, sequence, email)
-		_ = s.limiterCache.DeleteEmailCodeIncorrect(ctx, typ, sequence, email)
-		return ErrEmailVerifyLimitExceeded
-	}
-	// Non-destructive read
-	stored, err := s.cache.PeekEmailCode(ctx, typ, sequence, email)
-	if err != nil {
-		return err
-	}
+	return sendCode(ctx, s.ecdsaStore, s.limiter, s.keys, ec,
+		s.ttl, s.maxSendAttempts, s.sendWindowDuration, ErrEcdsaSendLimitExceeded, nil)
+}
 
-	if stored.Code.Code != input {
-		_, _ = s.limiterCache.IncrementEmailCodeIncorrect(ctx, typ, sequence, email,
-			s.maxVerifyIncorrect, s.verifyWindowDuration)
-		return ErrCodeIncorrect
-	}
-	// Delete after successful verification (one-time code)
-	if err = s.cache.DeleteEmailCode(ctx, typ, sequence, email); err != nil {
-		return err
-	}
-	// Clear verify incorrect count on success
-	_ = s.limiterCache.DeleteEmailCodeIncorrect(ctx, typ, sequence, email)
-	return nil
+// ============================================================================
+// Verify methods — all delegate to the generic verifyCode[T] function
+// ============================================================================
+
+func (s *OTPServiceImpl) VerifyMobileOTP(ctx context.Context, typ CodeType, sequence, mobile, countryCode, input string) error {
+	return verifyCode(ctx, s.mobileStore, s.limiter,
+		s.keys.CodeKey("MOBILE", typ, sequence, mobile, countryCode),
+		s.keys.IncorrectKey("MOBILE", typ, sequence, mobile, countryCode),
+		input, s.maxVerifyIncorrect, s.verifyWindowDuration, ErrMobileVerifyLimitExceeded)
+}
+
+func (s *OTPServiceImpl) VerifyEmailOTP(ctx context.Context, typ CodeType, sequence, email, input string) error {
+	return verifyCode(ctx, s.emailStore, s.limiter,
+		s.keys.CodeKey("EMAIL", typ, sequence, email),
+		s.keys.IncorrectKey("EMAIL", typ, sequence, email),
+		input, s.maxVerifyIncorrect, s.verifyWindowDuration, ErrEmailVerifyLimitExceeded)
+}
+
+func (s *OTPServiceImpl) VerifyEcdsaOTP(ctx context.Context, typ CodeType, sequence, chain, address, input string) error {
+	return verifyCode(ctx, s.ecdsaStore, s.limiter,
+		s.keys.CodeKey("ECDSA", typ, sequence, chain, address),
+		s.keys.IncorrectKey("ECDSA", typ, sequence, chain, address),
+		input, s.maxVerifyIncorrect, s.verifyWindowDuration, ErrEcdsaVerifyLimitExceeded)
 }

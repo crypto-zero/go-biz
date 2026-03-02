@@ -26,12 +26,11 @@ func isNDigits(s string, n int) bool {
 	return true
 }
 
-// wrongCodeFor returns a 4- or 6-digit code that is guaranteed to differ from sent.
+// wrongCodeFor returns a code that is guaranteed to differ from sent.
 func wrongCodeFor(sent string) string {
 	if len(sent) == 0 {
 		return "0000"
 	}
-	// flip the last digit safely
 	b := []byte(sent)
 	last := b[len(b)-1]
 	if last != '0' {
@@ -57,7 +56,7 @@ func getRedisClient(t *testing.T) (redis.UniversalClient, func(), func(time.Dura
 	return c, func() { _ = c.Close(); m.Close() }, m.FastForward
 }
 
-// fake sender captures the last MobileCode sent (package-private for tests).
+// fake sender captures the last MobileCode sent.
 type fakeSMSSender struct{ last *MobileCode }
 
 func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
@@ -65,7 +64,7 @@ func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
 	return nil
 }
 
-// fake email sender captures the last EmailCode sent (package-private for tests).
+// fake email sender captures the last EmailCode sent.
 type fakeEmailSender struct{ last *EmailCode }
 
 func (f *fakeEmailSender) Send(_ context.Context, ec *EmailCode) error {
@@ -73,48 +72,64 @@ func (f *fakeEmailSender) Send(_ context.Context, ec *EmailCode) error {
 	return nil
 }
 
-func TestVerification_CodeCache_Basics(t *testing.T) {
+// testConfig returns a default OTPConfig for testing.
+func testConfig(maxSend, maxVerify int64) OTPConfig {
+	return OTPConfig{
+		Prefix: "TEST", TTL: 5 * time.Minute,
+		MaxSendAttempts: maxSend, SendWindow: 5 * time.Minute,
+		MaxVerifyIncorrect: maxVerify, VerifyWindow: 5 * time.Minute,
+	}
+}
+
+func TestVerification_CodeStore_Basics(t *testing.T) {
 	ctx := context.Background()
 	client, cleanup, ff := getRedisClient(t)
 	defer cleanup()
 
-	generator := DefaultCodeGenerator // fixed "666666"
-	cache := NewCodeCacheImpl("TEST", client)
+	generator := NewTestCodeGenerator("666666")
+	keys := NewCacheKeyBuilder("TEST")
+	mobileStore := NewRedisCodeStore[MobileCode](client)
+	emailStore := NewRedisCodeStore[EmailCode](client)
+	ecdsaStore := NewRedisCodeStore[EcdsaCode](client)
 
 	t.Run("email set/get", func(t *testing.T) {
 		typ := "TEST_TYPE"
 		code, err := generator.NewEmailCode(ctx, CodeType(typ), 1, "abc@def.com")
 		assert.NoError(t, err)
-		assert.NoError(t, cache.SetEmailCode(ctx, code, time.Minute))
-		emailCode, err := cache.GetEmailCode(ctx, CodeType(typ), code.Sequence, code.Email)
+		key := keys.CodeKey("EMAIL", code.Type, code.Sequence, code.Email)
+		assert.NoError(t, emailStore.Set(ctx, key, code, time.Minute))
+		emailCode, err := emailStore.Get(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, emailCode)
 		assert.Equal(t, code.Content, emailCode.Content)
-		assert.Equal(t, "666666", emailCode.Code.Code) // fixed generator
+		assert.Equal(t, "666666", emailCode.Code.Code)
 	})
 
 	t.Run("email expired", func(t *testing.T) {
 		code, _ := generator.NewEmailCode(ctx, "TEST_TYPE", 1, "abc@def.com")
-		_ = cache.SetEmailCode(ctx, code, time.Second)
+		key := keys.CodeKey("EMAIL", code.Type, code.Sequence, code.Email)
+		_ = emailStore.Set(ctx, key, code, time.Second)
 		ff(2 * time.Second)
-		_, err := cache.GetEmailCode(ctx, "TEST_TYPE", code.Sequence, code.Email)
+		_, err := emailStore.Get(ctx, key)
 		assert.Equal(t, ErrCodeNotFound, err)
 	})
 
 	t.Run("mobile set/get", func(t *testing.T) {
 		code, _ := generator.NewMobileCode(ctx, "TEST_TYPE", 1, "13566667777", "86")
-		_ = cache.SetMobileCode(ctx, code, time.Minute)
-		mobileCode, err := cache.GetMobileCode(ctx, "TEST_TYPE", code.Sequence, code.Mobile, code.CountryCode)
+		key := keys.CodeKey("MOBILE", code.Type, code.Sequence, code.Mobile, code.CountryCode)
+		_ = mobileStore.Set(ctx, key, code, time.Minute)
+		mobileCode, err := mobileStore.Get(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, mobileCode)
 		assert.Equal(t, code.Content, mobileCode.Content)
-		assert.Equal(t, "666666", mobileCode.Code.Code) // fixed generator
+		assert.Equal(t, "666666", mobileCode.Code.Code)
 	})
 
 	t.Run("ecdsa set/get", func(t *testing.T) {
 		code, _ := generator.NewEcdsaCode(ctx, "TEST_TYPE", 1, "ETHEREUM", "0xabc")
-		_ = cache.SetEcdsaCode(ctx, code, time.Minute)
-		ecdsaCode, err := cache.GetEcdsaCode(ctx, "TEST_TYPE", code.Sequence, code.Chain, code.Address)
+		key := keys.CodeKey("ECDSA", code.Type, code.Sequence, code.Chain, code.Address)
+		_ = ecdsaStore.Set(ctx, key, code, time.Minute)
+		ecdsaCode, err := ecdsaStore.Get(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, ecdsaCode)
 		assert.Equal(t, code.Content, ecdsaCode.Content)
@@ -126,13 +141,11 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
 	fakeEmail := &fakeEmailSender{}
-	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
+	keys := NewCacheKeyBuilder("TEST")
+	svc := NewOTPService(testConfig(10, 10), client, fake, fakeEmail, NewTestCodeGenerator("666666"))
 
-	// Send
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
@@ -145,7 +158,8 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 		// Verify OK should delete
 		err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", "666666")
 		assert.NoError(t, err)
-		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
+		mobileStore := NewRedisCodeStore[MobileCode](client)
+		_, err = mobileStore.Peek(ctx, keys.CodeKey("MOBILE", "LOGIN", seq, "13800138000", "86"))
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrCodeNotFound))
 	}
@@ -156,11 +170,10 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
 	fakeEmail := &fakeEmailSender{}
-	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
+	keys := NewCacheKeyBuilder("TEST")
+	svc := NewOTPService(testConfig(10, 10), client, fake, fakeEmail, NewCodeGenerator(4))
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -170,10 +183,10 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 		code := fake.last.Code.Code
 		assert.True(t, isNDigits(code, 4), "code should be 4 digits, got: %q", code)
 
-		// Verify OK should delete
 		err := svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
 		assert.NoError(t, err)
-		_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
+		mobileStore := NewRedisCodeStore[MobileCode](client)
+		_, err = mobileStore.Peek(ctx, keys.CodeKey("MOBILE", "LOGIN", seq, "13800138000", "86"))
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrCodeNotFound))
 	}
@@ -184,12 +197,10 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
 	fakeEmail := &fakeEmailSender{}
-	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute,
-		10, 10)
+	keys := NewCacheKeyBuilder("TEST")
+	svc := NewOTPService(testConfig(10, 10), client, fake, fakeEmail, NewCodeGenerator(4))
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -200,9 +211,10 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 
 	bad := wrongCodeFor(sent)
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", bad)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
 	// should still exist
-	_, err = cache.PeekMobileCode(ctx, "login", seq, "13800138000", "86")
+	mobileStore := NewRedisCodeStore[MobileCode](client)
+	_, err = mobileStore.Peek(ctx, keys.CodeKey("MOBILE", "LOGIN", seq, "13800138000", "86"))
 	assert.NoError(t, err)
 }
 
@@ -211,13 +223,14 @@ func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 5, 2)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 5, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 2, VerifyWindow: time.Minute,
+	}, client, sender, emailSender, NewTestCodeGenerator("666666"))
 
-	// Send OTP
 	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
@@ -232,11 +245,11 @@ func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrCodeIncorrect)
 
-	// Third wrong attempt
+	// Third wrong attempt triggers limit
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
 
-	// Fourth wrong attempt should hit limit
+	// Fourth attempt — code is already deleted
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrCodeNotFound)
 
@@ -250,18 +263,19 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 	client, cleanup, ff := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Second, time.Second, time.Second, 5, 2)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Second,
+		MaxSendAttempts: 5, SendWindow: time.Second,
+		MaxVerifyIncorrect: 2, VerifyWindow: time.Second,
+	}, client, sender, emailSender, NewTestCodeGenerator("666666"))
 
-	// Send OTP
 	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	code := sender.last.Code.Code
 
-	// Verify with correct code before hitting limit
+	// Verify with correct code
 	err = svc.VerifyMobileOTP(ctx, "login", seq, "13800138000", "86", code)
 	assert.NoError(t, err)
 
@@ -283,7 +297,6 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 		err = svc.VerifyMobileOTP(ctx, "login", seq3, "13800138000", "86", wrongCodeFor(code3))
 		assert.ErrorIs(t, err, ErrCodeIncorrect)
 	}
-	// Should hit limit now
 	err = svc.VerifyMobileOTP(ctx, "login", seq3, "13800138000", "86", wrongCodeFor(code3))
 	assert.ErrorIs(t, err, ErrMobileVerifyLimitExceeded)
 }
@@ -293,19 +306,18 @@ func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	// Set send limit to 2
-	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 2, 5)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 2, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 5, VerifyWindow: time.Minute,
+	}, client, sender, emailSender, NewTestCodeGenerator("666666"))
 
-	// First send
 	seq1, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq1)
 
-	// Second send
 	seq2, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq2)
@@ -324,28 +336,29 @@ func TestOTPServiceImpl_EmailOTP_SendAndVerify(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	smsSender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
-		time.Minute, time.Minute, time.Minute, 5, 2)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 5, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 2, VerifyWindow: time.Minute,
+	}, client, smsSender, emailSender, NewTestCodeGenerator("666666"))
 
-	// Send email OTP
 	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq)
 	require.NotNil(t, emailSender.last)
 	assert.Equal(t, "user@example.com", emailSender.last.Email)
 	code := emailSender.last.Code.Code
-	assert.Equal(t, "666666", code) // DefaultCodeGenerator uses static "666666"
+	assert.Equal(t, "666666", code)
 
-	// Verify with correct code
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", code)
 	assert.NoError(t, err)
 
-	// Code should be deleted after successful verification
-	_, err = cache.PeekEmailCode(ctx, "login", seq, "user@example.com")
+	// Code should be deleted
+	keys := NewCacheKeyBuilder("TEST")
+	emailStore := NewRedisCodeStore[EmailCode](client)
+	_, err = emailStore.Peek(ctx, keys.CodeKey("EMAIL", "LOGIN", seq, "user@example.com"))
 	assert.ErrorIs(t, err, ErrCodeNotFound)
 }
 
@@ -354,23 +367,26 @@ func TestOTPServiceImpl_EmailOTP_VerifyFailKeepsCode(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	smsSender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
-		time.Minute, time.Minute, time.Minute, 5, 5)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 5, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 5, VerifyWindow: time.Minute,
+	}, client, smsSender, emailSender, NewTestCodeGenerator("666666"))
 
 	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
 	assert.NoError(t, err)
 	code := emailSender.last.Code.Code
 
-	// Wrong code should return ErrCodeIncorrect
+	// Wrong code
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrCodeIncorrect)
 
 	// Code should still exist
-	_, err = cache.PeekEmailCode(ctx, "login", seq, "user@example.com")
+	keys := NewCacheKeyBuilder("TEST")
+	emailStore := NewRedisCodeStore[EmailCode](client)
+	_, err = emailStore.Peek(ctx, keys.CodeKey("EMAIL", "LOGIN", seq, "user@example.com"))
 	assert.NoError(t, err)
 
 	// Correct code should still work
@@ -383,30 +399,29 @@ func TestOTPServiceImpl_EmailOTP_VerifyLimitExceeded(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	smsSender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
-		time.Minute, time.Minute, time.Minute, 5, 2)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 5, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 2, VerifyWindow: time.Minute,
+	}, client, smsSender, emailSender, NewTestCodeGenerator("666666"))
 
 	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
 	assert.NoError(t, err)
 	code := emailSender.last.Code.Code
 
-	// First wrong attempt
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrCodeIncorrect)
 
-	// Second wrong attempt
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrCodeIncorrect)
 
-	// Third attempt triggers limit exceeded — code is deleted
+	// Third attempt triggers limit
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
 	assert.ErrorIs(t, err, ErrEmailVerifyLimitExceeded)
 
-	// Correct code after limit should fail with not found
+	// Correct code after limit should fail
 	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", code)
 	assert.ErrorIs(t, err, ErrCodeNotFound)
 }
@@ -416,19 +431,18 @@ func TestOTPServiceImpl_EmailOTP_SendLimitExceeded(t *testing.T) {
 	client, cleanup, _ := getRedisClient(t)
 	defer cleanup()
 
-	cache := NewCodeCacheImpl("TEST", client)
-	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	smsSender := &fakeSMSSender{}
 	emailSender := &fakeEmailSender{}
-	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
-		time.Minute, time.Minute, time.Minute, 2, 5)
+	svc := NewOTPService(OTPConfig{
+		Prefix: "TEST", TTL: time.Minute,
+		MaxSendAttempts: 2, SendWindow: time.Minute,
+		MaxVerifyIncorrect: 5, VerifyWindow: time.Minute,
+	}, client, smsSender, emailSender, NewTestCodeGenerator("666666"))
 
-	// First send
 	seq1, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq1)
 
-	// Second send
 	seq2, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq2)

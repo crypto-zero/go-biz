@@ -1,4 +1,4 @@
-package verification
+package smtp
 
 import (
 	"bufio"
@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crypto-zero/go-biz/verification"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,8 +132,19 @@ func (s *mockSMTPServer) serve(t *testing.T) {
 	}
 }
 
-func testEmailTemplate() EmailTemplateMapper {
-	return EmailTemplateMapper{
+// testTemplateProvider is a test helper that implements verification.TemplateProvider.
+type testTemplateProvider map[verification.CodeType]*Template
+
+func (p testTemplateProvider) GetTemplate(typ verification.CodeType) (*Template, error) {
+	t, ok := p[typ]
+	if !ok {
+		return nil, verification.ErrEmailTemplateNotFound
+	}
+	return t, nil
+}
+
+func testEmailTemplate() testTemplateProvider {
+	return testTemplateProvider{
 		"LOGIN": {
 			Subject:     "Login Code",
 			BodyFormat:  "<p>Your code: <b>%s</b></p>",
@@ -146,21 +158,21 @@ func testEmailTemplate() EmailTemplateMapper {
 	}
 }
 
-func TestSMTPEmailSender_Validation(t *testing.T) {
-	sender := NewSMTPEmailSender(&SMTPConfig{Host: "localhost", Port: 587}, testEmailTemplate())
+func TestSender_Validation(t *testing.T) {
+	sender := NewSender(&Config{Host: "localhost", Port: 587}, testEmailTemplate())
 
 	tests := []struct {
 		name string
-		code *EmailCode
+		code *verification.EmailCode
 		err  error
 	}{
-		{"nil code", nil, ErrNilEmailCode},
-		{"empty email", &EmailCode{Code: Code{Code: "123456", Type: "LOGIN"}}, ErrEmailCodeEmailIsEmpty},
-		{"empty code", &EmailCode{Code: Code{Type: "LOGIN"}, Email: "a@b.com"}, ErrEmailCodeCodeIsEmpty},
-		{"empty type", &EmailCode{Code: Code{Code: "123456"}, Email: "a@b.com"}, ErrEmailCodeTypeIsEmpty},
-		{"template not found", &EmailCode{
-			Code: Code{Code: "123456", Type: "UNKNOWN"}, Email: "a@b.com",
-		}, ErrEmailTemplateNotFound},
+		{"nil code", nil, verification.ErrNilEmailCode},
+		{"empty email", &verification.EmailCode{Code: verification.Code{Code: "123456", Type: "LOGIN"}}, verification.ErrEmailCodeEmailIsEmpty},
+		{"empty code", &verification.EmailCode{Code: verification.Code{Type: "LOGIN"}, Email: "a@b.com"}, verification.ErrEmailCodeCodeIsEmpty},
+		{"empty type", &verification.EmailCode{Code: verification.Code{Code: "123456"}, Email: "a@b.com"}, verification.ErrEmailCodeTypeIsEmpty},
+		{"template not found", &verification.EmailCode{
+			Code: verification.Code{Code: "123456", Type: "UNKNOWN"}, Email: "a@b.com",
+		}, verification.ErrEmailTemplateNotFound},
 	}
 
 	for _, tt := range tests {
@@ -171,8 +183,8 @@ func TestSMTPEmailSender_Validation(t *testing.T) {
 	}
 }
 
-func TestSMTPEmailSender_BuildMessage(t *testing.T) {
-	sender := NewSMTPEmailSender(&SMTPConfig{
+func TestSender_BuildMessage(t *testing.T) {
+	sender := NewSender(&Config{
 		Host: "smtp.example.com", Port: 587,
 		Username: "user", Password: "pass",
 		From: "noreply@example.com",
@@ -199,19 +211,19 @@ func TestSMTPEmailSender_BuildMessage(t *testing.T) {
 	})
 }
 
-func TestSMTPEmailSender_Send_Integration(t *testing.T) {
+func TestSender_Send_Integration(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPEmailSender(&SMTPConfig{
+	sender := NewSender(&Config{
 		Host: srv.host(), Port: srv.port(),
 		From: "noreply@example.com",
 		// no auth for mock server
 	}, testEmailTemplate())
 
 	t.Run("html email", func(t *testing.T) {
-		ec := &EmailCode{
-			Code:  Code{Code: "888888", Type: "LOGIN"},
+		ec := &verification.EmailCode{
+			Code:  verification.Code{Code: "888888", Type: "LOGIN"},
 			Email: "user@example.com",
 		}
 		err := sender.Send(context.Background(), ec)
@@ -224,14 +236,14 @@ func TestSMTPEmailSender_Send_Integration(t *testing.T) {
 	})
 }
 
-// TestSMTPEmailSender_RealSend sends a real email via SMTP.
+// TestSender_RealSend sends a real email via SMTP.
 // Skipped unless SMTP_HOST is set. Designed to work with Mailpit:
 //
 //	docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit
 //
 // Then run:
 //
-//	SMTP_HOST=localhost SMTP_TEST_TO=test@example.com go test -v -run TestSMTPEmailSender_RealSend ./...
+//	SMTP_HOST=localhost SMTP_TEST_TO=test@example.com go test -v -run TestSender_RealSend ./...
 //
 // Open http://localhost:8025 to view the captured email.
 //
@@ -239,15 +251,15 @@ func TestSMTPEmailSender_Send_Integration(t *testing.T) {
 //
 //	SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USERNAME=you@gmail.com \
 //	SMTP_PASSWORD=app-password SMTP_FROM=you@gmail.com \
-//	SMTP_TEST_TO=recipient@example.com go test -v -run TestSMTPEmailSender_RealSend ./...
+//	SMTP_TEST_TO=recipient@example.com go test -v -run TestSender_RealSend ./...
 //
 // For SSL/TLS servers (e.g. Hostinger, port 465):
 //
 //	SMTP_HOST=smtp.hostinger.com SMTP_PORT=465 SMTP_SSL=true \
 //	SMTP_USERNAME=you@yourdomain.com SMTP_PASSWORD=your-password \
 //	SMTP_FROM=you@yourdomain.com SMTP_TEST_TO=recipient@example.com \
-//	go test -v -run TestSMTPEmailSender_RealSend ./...
-func TestSMTPEmailSender_RealSend(t *testing.T) {
+//	go test -v -run TestSender_RealSend ./...
+func TestSender_RealSend(t *testing.T) {
 	host := os.Getenv("SMTP_HOST")
 	if host == "" {
 		t.Skip("SMTP_HOST not set, skipping real SMTP test")
@@ -272,7 +284,7 @@ func TestSMTPEmailSender_RealSend(t *testing.T) {
 
 	useSSL := os.Getenv("SMTP_SSL") == "true"
 
-	config := &SMTPConfig{
+	config := &Config{
 		Host:     host,
 		Port:     port,
 		Username: os.Getenv("SMTP_USERNAME"),
@@ -281,7 +293,7 @@ func TestSMTPEmailSender_RealSend(t *testing.T) {
 		SSL:      useSSL,
 	}
 
-	tmpl := EmailTemplateMapper{
+	tmpl := testTemplateProvider{
 		"LOGIN": {
 			Subject:     "Login Verification Code",
 			ContentType: "text/html",
@@ -323,9 +335,9 @@ func TestSMTPEmailSender_RealSend(t *testing.T) {
 		},
 	}
 
-	sender := NewSMTPEmailSender(config, tmpl)
-	ec := &EmailCode{
-		Code:  Code{Code: "888888", Type: "LOGIN"},
+	sender := NewSender(config, tmpl)
+	ec := &verification.EmailCode{
+		Code:  verification.Code{Code: "888888", Type: "LOGIN"},
 		Email: to,
 	}
 	err := sender.Send(context.Background(), ec)

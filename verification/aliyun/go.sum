@@ -66,8 +66,6 @@ github.com/clbanning/mxj/v2 v2.7.0 h1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyM
 github.com/clbanning/mxj/v2 v2.7.0/go.mod h1:hNiWqW14h+kc+MdF9C6/YoRfjEJoR3ou6tn/Qo+ve2s=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
-github.com/crypto-zero/go-biz/verification v0.0.0-20251006105426-276c489b11b7 h1:PGMa/FLClgI+MsvHsfFbo37QQw1t0ialGuPRSNYQuWc=
-github.com/crypto-zero/go-biz/verification v0.0.0-20251006105426-276c489b11b7/go.mod h1:HvZfFCGxbZq+9K1zlsqCphBmYJKUbWOkiwP3tZ69lHg=
 github.com/crypto-zero/go-kit v0.0.0-20251005101732-77555572de66 h1:q5WS4ZJqGL+ZzNWuSg2jq9jsRkqGxmc5Pg7wEVobqg8=
 github.com/crypto-zero/go-kit v0.0.0-20251005101732-77555572de66/go.mod h1:jQKtbjXsKMxyarrDV5nZUs1fT0uAmNhahXQSsG+pMJM=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

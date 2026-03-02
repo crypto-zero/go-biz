@@ -1,14 +1,15 @@
 package aliyun
 
 import (
+	"context"
+	"errors"
+	"log"
 	"os"
 	"testing"
 	"time"
-	"errors"
-	"log"
-	"github.com/stretchr/testify/assert"
-	"context"
+
 	"github.com/crypto-zero/go-biz/verification"
+	"github.com/stretchr/testify/assert"
 )
 
 func mustEnv(key string) (string, error) {
@@ -68,10 +69,21 @@ func init() {
 	}
 }
 
+// testTemplateProvider is a test helper that implements verification.TemplateProvider.
+type testTemplateProvider map[verification.CodeType]*Template
+
+func (p testTemplateProvider) GetTemplate(typ verification.CodeType) (*Template, error) {
+	t, ok := p[typ]
+	if !ok {
+		return nil, ErrTemplateNotFound
+	}
+	return t, nil
+}
+
 func TestAliyunSMS_SendMessageWithTemplate_CN(t *testing.T) {
 	cli, err := NewAliyunMainlandSMSClient(ak, sk, region, endpoint)
 	assert.Nil(t, err)
-	sender := NewSMS(cli, map[verification.CodeType]*Template{
+	sender := NewSMS(cli, testTemplateProvider{
 		"LOGIN": {
 			SignName:     signCN,
 			Code:         tplCN,

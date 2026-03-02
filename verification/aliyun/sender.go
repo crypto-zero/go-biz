@@ -1,25 +1,23 @@
 package aliyun
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 
-	"github.com/crypto-zero/go-biz/verification"
-	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
+	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
+	"github.com/crypto-zero/go-biz/verification"
 )
 
 var (
 	ErrTemplateNotFound = errors.New("template not found")
 )
 
-type TemplateMapper map[verification.CodeType]*Template
-
 // SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
 type SMS struct {
 	mainlandClient *dysms.Client
-	template       TemplateMapper
+	template       verification.TemplateProvider[Template]
 }
 
 // Template represents an SMS template with code and sign.
@@ -34,7 +32,7 @@ type Template struct {
 var _ verification.MobileCodeSender = (*SMS)(nil)
 
 // NewSMS creates a new AliyunSMS with the given Dysms client.
-func NewSMS(client *dysms.Client, template TemplateMapper) *SMS {
+func NewSMS(client *dysms.Client, template verification.TemplateProvider[Template]) *SMS {
 	return &SMS{
 		mainlandClient: client,
 		template:       template,
@@ -58,7 +56,7 @@ func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error
 	if mobileCode.Type == "" {
 		return verification.ErrMobileCodeTypeIsEmpty
 	}
-	template, err := a.getTemplateByType(mobileCode.Type)
+	template, err := a.template.GetTemplate(mobileCode.Type)
 	if err != nil {
 		return err
 	}
@@ -69,15 +67,6 @@ func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error
 		return err
 	}
 	return nil
-}
-
-// getTemplateByType retrieves the template for the given code type.
-func (a *SMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
-	t, ok := a.template[typ]
-	if !ok {
-		return nil, ErrTemplateNotFound
-	}
-	return t, nil
 }
 
 // sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
