@@ -10,6 +10,7 @@ import (
 	mr "github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // isNDigits returns true if s is exactly n ASCII digits.
@@ -61,6 +62,14 @@ type fakeSMSSender struct{ last *MobileCode }
 
 func (f *fakeSMSSender) Send(_ context.Context, mc *MobileCode) error {
 	f.last = mc
+	return nil
+}
+
+// fake email sender captures the last EmailCode sent (package-private for tests).
+type fakeEmailSender struct{ last *EmailCode }
+
+func (f *fakeEmailSender) Send(_ context.Context, ec *EmailCode) error {
+	f.last = ec
 	return nil
 }
 
@@ -119,8 +128,9 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
+	fakeEmail := &fakeEmailSender{}
 	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
+	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
 
 	// Send
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -148,8 +158,9 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 
 	cache := NewCodeCacheImpl(CodeCacheKeyPrefix("TEST"), client)
 	fake := &fakeSMSSender{}
+	fakeEmail := &fakeEmailSender{}
 	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
+	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute, 10, 10)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
 	assert.NoError(t, err)
@@ -175,8 +186,9 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 
 	cache := NewCodeCacheImpl("TEST", client)
 	fake := &fakeSMSSender{}
+	fakeEmail := &fakeEmailSender{}
 	limiterCache := NewCodeLimiterCacheImpl("TEST", client)
-	svc := NewStaticOTPService(cache, limiterCache, fake, 5*time.Minute, 5*time.Minute, 5*time.Minute,
+	svc := NewStaticOTPService(cache, limiterCache, fake, fakeEmail, 5*time.Minute, 5*time.Minute, 5*time.Minute,
 		10, 10)
 
 	seq, err := svc.SendMobileOTP(ctx, "login", 123, "13800138000", "86")
@@ -202,7 +214,8 @@ func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
-	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 5, 2)
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 5, 2)
 
 	// Send OTP
 	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
@@ -240,7 +253,8 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
-	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Second, time.Second, time.Second, 5, 2)
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Second, time.Second, time.Second, 5, 2)
 
 	// Send OTP
 	seq, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
@@ -282,8 +296,9 @@ func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
 	cache := NewCodeCacheImpl("TEST", client)
 	limiter := NewCodeLimiterCacheImpl("TEST", client)
 	sender := &fakeSMSSender{}
+	emailSender := &fakeEmailSender{}
 	// Set send limit to 2
-	svc := NewOTPService(cache, limiter, sender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 2, 5)
+	svc := NewOTPService(cache, limiter, sender, emailSender, DefaultCodeGenerator, time.Minute, time.Minute, time.Minute, 2, 5)
 
 	// First send
 	seq1, err := svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
@@ -298,4 +313,127 @@ func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
 	// Third send should hit limit
 	_, err = svc.SendMobileOTP(ctx, "login", 1, "13800138000", "86")
 	assert.ErrorIs(t, err, ErrMobileSendLimitExceeded)
+}
+
+// ============================================================================
+// Email OTP Integration Tests
+// ============================================================================
+
+func TestOTPServiceImpl_EmailOTP_SendAndVerify(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	smsSender := &fakeSMSSender{}
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
+		time.Minute, time.Minute, time.Minute, 5, 2)
+
+	// Send email OTP
+	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq)
+	require.NotNil(t, emailSender.last)
+	assert.Equal(t, "user@example.com", emailSender.last.Email)
+	code := emailSender.last.Code.Code
+	assert.Equal(t, "666666", code) // DefaultCodeGenerator uses static "666666"
+
+	// Verify with correct code
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", code)
+	assert.NoError(t, err)
+
+	// Code should be deleted after successful verification
+	_, err = cache.PeekEmailCode(ctx, "login", seq, "user@example.com")
+	assert.ErrorIs(t, err, ErrCodeNotFound)
+}
+
+func TestOTPServiceImpl_EmailOTP_VerifyFailKeepsCode(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	smsSender := &fakeSMSSender{}
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
+		time.Minute, time.Minute, time.Minute, 5, 5)
+
+	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.NoError(t, err)
+	code := emailSender.last.Code.Code
+
+	// Wrong code should return ErrCodeIncorrect
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
+
+	// Code should still exist
+	_, err = cache.PeekEmailCode(ctx, "login", seq, "user@example.com")
+	assert.NoError(t, err)
+
+	// Correct code should still work
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", code)
+	assert.NoError(t, err)
+}
+
+func TestOTPServiceImpl_EmailOTP_VerifyLimitExceeded(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	smsSender := &fakeSMSSender{}
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
+		time.Minute, time.Minute, time.Minute, 5, 2)
+
+	seq, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.NoError(t, err)
+	code := emailSender.last.Code.Code
+
+	// First wrong attempt
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
+
+	// Second wrong attempt
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrCodeIncorrect)
+
+	// Third attempt triggers limit exceeded — code is deleted
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", wrongCodeFor(code))
+	assert.ErrorIs(t, err, ErrEmailVerifyLimitExceeded)
+
+	// Correct code after limit should fail with not found
+	err = svc.VerifyEmailOTP(ctx, "login", seq, "user@example.com", code)
+	assert.ErrorIs(t, err, ErrCodeNotFound)
+}
+
+func TestOTPServiceImpl_EmailOTP_SendLimitExceeded(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup, _ := getRedisClient(t)
+	defer cleanup()
+
+	cache := NewCodeCacheImpl("TEST", client)
+	limiter := NewCodeLimiterCacheImpl("TEST", client)
+	smsSender := &fakeSMSSender{}
+	emailSender := &fakeEmailSender{}
+	svc := NewOTPService(cache, limiter, smsSender, emailSender, DefaultCodeGenerator,
+		time.Minute, time.Minute, time.Minute, 2, 5)
+
+	// First send
+	seq1, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq1)
+
+	// Second send
+	seq2, err := svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, seq2)
+
+	// Third send should hit limit
+	_, err = svc.SendEmailOTP(ctx, "login", 1, "user@example.com")
+	assert.ErrorIs(t, err, ErrEmailSendLimitExceeded)
 }

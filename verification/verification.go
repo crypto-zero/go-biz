@@ -97,3 +97,9 @@ type MobileCodeSender interface {
 	// Send the mobile verification code via SMS.
 	Send(ctx context.Context, code *MobileCode) error
 }
+
+// EmailCodeSender represents an email verification code sender.
+type EmailCodeSender interface {
+	// Send the email verification code via email.
+	Send(ctx context.Context, code *EmailCode) error
+}
