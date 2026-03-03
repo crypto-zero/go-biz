@@ -11,7 +11,7 @@ import (
 )
 
 // setCode encodes v as JSON and stores it in Redis under key with the given TTL.
-func setCode[T any](ctx context.Context, client redis.UniversalClient, key string, v *T, ttl time.Duration) error {
+func setCode[T VerificationCode](ctx context.Context, client redis.UniversalClient, key string, v *T, ttl time.Duration) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("verification: encode failed: %w", err)
@@ -24,7 +24,7 @@ func setCode[T any](ctx context.Context, client redis.UniversalClient, key strin
 
 // getCode fetches and JSON-decodes a value from Redis.
 // If deleteAfter is true it uses GETDEL (atomic get+delete), otherwise plain GET.
-func getCode[T any](ctx context.Context, client redis.UniversalClient, key string, deleteAfter bool) (*T, error) {
+func getCode[T VerificationCode](ctx context.Context, client redis.UniversalClient, key string, deleteAfter bool) (*T, error) {
 	var cmd *redis.StringCmd
 	if deleteAfter {
 		cmd = client.GetDel(ctx, key)
@@ -54,7 +54,7 @@ func deleteCode(ctx context.Context, client redis.UniversalClient, key string) e
 }
 
 // CodeStore[T] provides typed CRUD for verification codes.
-type CodeStore[T any] interface {
+type CodeStore[T VerificationCode] interface {
 	Set(ctx context.Context, key string, code *T, expire time.Duration) error
 	Get(ctx context.Context, key string) (*T, error)
 	Peek(ctx context.Context, key string) (*T, error)
@@ -62,12 +62,12 @@ type CodeStore[T any] interface {
 }
 
 // RedisCodeStore[T] implements CodeStore[T] backed by Redis + JSON.
-type RedisCodeStore[T any] struct {
+type RedisCodeStore[T VerificationCode] struct {
 	client redis.UniversalClient
 }
 
 // NewRedisCodeStore creates a CodeStore[T] backed by the given Redis client.
-func NewRedisCodeStore[T any](client redis.UniversalClient) CodeStore[T] {
+func NewRedisCodeStore[T VerificationCode](client redis.UniversalClient) CodeStore[T] {
 	return &RedisCodeStore[T]{client: client}
 }
 

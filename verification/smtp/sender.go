@@ -14,21 +14,6 @@ import (
 	"github.com/crypto-zero/go-biz/verification"
 )
 
-// Template represents an email template with subject and body format.
-type Template struct {
-	// Subject is the email subject line, supports fmt.Sprintf with the code as argument.
-	// e.g., "Your verification code"
-	Subject string `json:"subject"`
-	// BodyFormat is the email body format string.
-	// Use {{code}} as the placeholder for the verification code.
-	// Supports both plain text and HTML.
-	// e.g., "<p>Your verification code is: <b>{{code}}</b></p>"
-	BodyFormat string `json:"body_format"`
-	// ContentType specifies the MIME type for the body: "text/plain" or "text/html".
-	// Defaults to "text/plain" if empty.
-	ContentType string `json:"content_type"`
-}
-
 // Config holds the SMTP connection configuration.
 type Config struct {
 	Host     string // SMTP server host, e.g., "smtp.gmail.com"
@@ -44,17 +29,17 @@ func (c *Config) Addr() string {
 	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 }
 
-// Sender implements EmailCodeSender using Go standard library net/smtp.
+// Sender implements CodeSender[EmailCode] using Go standard library net/smtp.
 type Sender struct {
 	config   *Config
-	template verification.TemplateProvider[Template]
+	template verification.TemplateProvider[verification.EmailTemplate]
 }
 
-// Compile-time assertion: Sender implements EmailCodeSender.
-var _ verification.EmailCodeSender = (*Sender)(nil)
+// Compile-time assertion: Sender implements CodeSender[EmailCode].
+var _ verification.CodeSender[verification.EmailCode] = (*Sender)(nil)
 
 // NewSender creates a new Sender.
-func NewSender(config *Config, template verification.TemplateProvider[Template]) *Sender {
+func NewSender(config *Config, template verification.TemplateProvider[verification.EmailTemplate]) *Sender {
 	return &Sender{
 		config:   config,
 		template: template,

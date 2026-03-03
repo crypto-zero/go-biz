@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/crypto-zero/go-kit/text"
 )
@@ -80,7 +79,7 @@ func (g *codeGenerator) NewMobileCode(
 	if err != nil {
 		return nil, err
 	}
-	return &MobileCode{Code: base, Mobile: mobile, CountryCode: countryCode}, nil
+	return NewMobileCode(base, mobile, countryCode), nil
 }
 
 func (g *codeGenerator) NewEmailCode(
@@ -90,7 +89,7 @@ func (g *codeGenerator) NewEmailCode(
 	if err != nil {
 		return nil, err
 	}
-	return &EmailCode{Code: base, Email: email}, nil
+	return NewEmailCode(base, email), nil
 }
 
 func (g *codeGenerator) NewEcdsaCode(
@@ -100,8 +99,5 @@ func (g *codeGenerator) NewEcdsaCode(
 	if err != nil {
 		return nil, err
 	}
-	// Append timestamp for ECDSA challenge uniqueness.
-	base.Code = fmt.Sprintf("%s-%d", base.Code, time.Now().UnixNano())
-	base.Content = fmt.Sprintf("Your verification code is: %s.", base.Code)
-	return &EcdsaCode{Code: base, Chain: chain, Address: address}, nil
+	return NewEcdsaCode(base, chain, address), nil
 }

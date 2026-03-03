@@ -6,22 +6,6 @@ import (
 	"time"
 )
 
-// Verifiable is satisfied by any code type that can return its verification code string.
-type Verifiable interface {
-	VerificationCode() string
-}
-
-// Codeable extends Verifiable with key-building metadata.
-// Satisfied by MobileCode, EmailCode, EcdsaCode via their methods.
-type Codeable interface {
-	Verifiable
-	Medium() string          // e.g. "MOBILE", "EMAIL", "ECDSA"
-	CacheKeyParts() []string // e.g. [sequence, mobile, countryCode]
-	LimitKeyParts() []string // e.g. [mobile, countryCode]  (no sequence)
-	GetSequence() string
-	GetType() CodeType
-}
-
 // verifyCode performs the standard OTP verification flow for any code type.
 //
 // The flow is designed to be race-safe:
@@ -33,7 +17,10 @@ type Codeable interface {
 //
 // This avoids the TOCTOU race between GetIncorrectCount and IncrementIncorrect
 // that could allow concurrent requests to bypass the limit.
-func verifyCode[T Verifiable](
+func verifyCode[T interface {
+	VerificationCode
+	Verifiable
+}](
 	ctx context.Context,
 	store CodeStore[T],
 	limiter CodeLimiter,
@@ -77,7 +64,10 @@ func verifyCode[T Verifiable](
 // sendCode performs the common OTP send flow: rate-limit check → store code → optional send.
 // sendFn is called after storing (e.g. to send SMS/email); on failure the code is rolled back.
 // Pass nil for sendFn if no external delivery is needed (e.g. ECDSA challenge).
-func sendCode[T Codeable](
+func sendCode[T interface {
+	VerificationCode
+	Codeable
+}](
 	ctx context.Context,
 	store CodeStore[T],
 	limiter CodeLimiter,

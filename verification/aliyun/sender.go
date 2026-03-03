@@ -9,25 +9,17 @@ import (
 	"github.com/crypto-zero/go-biz/verification"
 )
 
-// SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
+// SMS implements CodeSender[MobileCode] using Alibaba Cloud Dysms API.
 type SMS struct {
 	mainlandClient *dysms.Client
-	template       verification.TemplateProvider[Template]
+	template       verification.TemplateProvider[verification.SMSTemplate]
 }
 
-// Template represents an SMS template with code and sign.
-type Template struct {
-	TaskID       string `json:"task_id"`       // Optional: used for global SMS
-	Code         string `json:"code"`          // Template code
-	SignName     string `json:"sign_name"`     // Sign name
-	ParamsFormat string `json:"params_format"` // JSON format string for template parameters, e.g., `{"code":"%s"}`
-}
+// Compile-time assertion: SMS implements CodeSender[MobileCode].
+var _ verification.CodeSender[verification.MobileCode] = (*SMS)(nil)
 
-// Compile-time assertion: AliyunSMS implements MobileCodeSender.
-var _ verification.MobileCodeSender = (*SMS)(nil)
-
-// NewSMS creates a new AliyunSMS with the given Dysms client.
-func NewSMS(client *dysms.Client, template verification.TemplateProvider[Template]) *SMS {
+// NewSMS creates a new SMS with the given Dysms client.
+func NewSMS(client *dysms.Client, template verification.TemplateProvider[verification.SMSTemplate]) *SMS {
 	return &SMS{
 		mainlandClient: client,
 		template:       template,
