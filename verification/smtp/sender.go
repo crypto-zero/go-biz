@@ -2,13 +2,16 @@ package smtp
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"mime"
 	"net"
 	"net/smtp"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -32,49 +35,69 @@ func (c *Config) Addr() string {
 
 // Sender implements CodeSender[EmailCode] using Go standard library net/smtp.
 type Sender struct {
-	config   *Config
-	template verification.TemplateProvider[verification.EmailTemplate]
+	config    *Config
+	provider  verification.TemplateProvider[verification.EmailTemplate]
+	tmplCache sync.Map // map[CodeType]*cachedTemplate
+}
+
+// cachedTemplate holds a pre-parsed template alongside its metadata.
+type cachedTemplate struct {
+	tmpl        *template.Template
+	subject     string
+	contentType string
 }
 
 // Compile-time assertion: Sender implements CodeSender[EmailCode].
 var _ verification.CodeSender[verification.EmailCode] = (*Sender)(nil)
 
 // NewSender creates a new Sender.
-func NewSender(config *Config, template verification.TemplateProvider[verification.EmailTemplate]) *Sender {
+func NewSender(config *Config, provider verification.TemplateProvider[verification.EmailTemplate]) *Sender {
 	return &Sender{
 		config:   config,
-		template: template,
+		provider: provider,
 	}
 }
 
 // Send sends the email verification code via SMTP.
 func (s *Sender) Send(ctx context.Context, emailCode *verification.EmailCode) error {
-	tmpl, err := s.template.GetTemplate(emailCode.Type)
+	ct, err := s.getTemplate(emailCode.Type)
 	if err != nil {
 		return err
 	}
 
-	contentType := tmpl.ContentType
-	if contentType == "" {
-		contentType = "text/plain"
-	}
-
-	t, err := template.New("email").Parse(tmpl.BodyFormat)
-	if err != nil {
-		return fmt.Errorf("failed to parse email template: %w", err)
-	}
-
 	var buf strings.Builder
-	if err = t.Execute(&buf, emailCode); err != nil {
+	if err = ct.tmpl.Execute(&buf, emailCode); err != nil {
 		return fmt.Errorf("failed to execute email template: %w", err)
 	}
 
-	msg := s.buildMessage(emailCode.Email, tmpl.Subject, contentType, buf.String())
+	msg := s.buildMessage(emailCode.Email, ct.subject, ct.contentType, buf.String())
 
 	if s.config.SSL {
 		return s.sendWithSSL(ctx, emailCode.Email, msg)
 	}
 	return s.sendWithSTARTTLS(ctx, emailCode.Email, msg)
+}
+
+// getTemplate returns a cached, pre-parsed template for the given code type.
+func (s *Sender) getTemplate(typ verification.CodeType) (*cachedTemplate, error) {
+	if cached, ok := s.tmplCache.Load(typ); ok {
+		return cached.(*cachedTemplate), nil
+	}
+	tmpl, err := s.provider.GetTemplate(typ)
+	if err != nil {
+		return nil, err
+	}
+	contentType := tmpl.ContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	t, err := template.New("email").Parse(tmpl.BodyFormat)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse email template: %w", err)
+	}
+	ct := &cachedTemplate{tmpl: t, subject: tmpl.Subject, contentType: contentType}
+	s.tmplCache.Store(typ, ct)
+	return ct, nil
 }
 
 // sendWithSTARTTLS sends email using STARTTLS (port 587) with context support.
@@ -182,9 +205,7 @@ func (s *Sender) buildMessage(to, subject, contentType, body string) []byte {
 	b.WriteString(now.Format(time.RFC1123Z))
 	b.WriteString("\r\n")
 	b.WriteString("Message-ID: <")
-	b.WriteString(strconv.FormatInt(now.UnixNano(), 10))
-	b.WriteByte('.')
-	b.WriteString(s.config.From)
+	b.WriteString(messageID(now, s.config.From))
 	b.WriteString(">\r\n")
 	b.WriteString("Subject: ")
 	b.WriteString(mime.QEncoding.Encode("UTF-8", subject))
@@ -196,4 +217,12 @@ func (s *Sender) buildMessage(to, subject, contentType, body string) []byte {
 	b.WriteString("\r\n")
 	b.WriteString(body)
 	return []byte(b.String())
+}
+
+// messageID generates a globally unique RFC 5322 Message-ID.
+// Combines nanosecond timestamp with 8 bytes of crypto/rand for uniqueness.
+func messageID(now time.Time, from string) string {
+	rb := make([]byte, 8)
+	_, _ = rand.Read(rb)
+	return fmt.Sprintf("%d.%s.%s", now.UnixNano(), hex.EncodeToString(rb), from)
 }

@@ -3,7 +3,6 @@ package verification
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"strings"
 
 	"github.com/crypto-zero/go-kit/text"
@@ -63,52 +62,36 @@ func (g *codeGenerator) newBaseCode(typ CodeType, userID int64) (Code, error) {
 		Type:       CodeType(strings.ToUpper(string(typ))),
 		Sequence:   seq,
 		CodeLength: clen,
-		Code:       code,
-		Content:    fmt.Sprintf("Your verification code is: %s.", code),
+		Value:      code,
 	}, nil
 }
 
 func (g *codeGenerator) NewMobileCode(
 	typ CodeType, userID int64, mobile, countryCode string,
 ) (*MobileCode, error) {
-	if mobile == "" {
-		return nil, ErrMobileCodeMobileIsEmpty
-	}
-	if countryCode == "" {
-		return nil, ErrMobileCodeCountryCodeIsEmpty
-	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err
 	}
-	return NewMobileCode(base, mobile, countryCode), nil
+	return NewMobileCode(base, mobile, countryCode)
 }
 
 func (g *codeGenerator) NewEmailCode(
 	typ CodeType, userID int64, email string,
 ) (*EmailCode, error) {
-	if email == "" {
-		return nil, ErrEmailCodeEmailIsEmpty
-	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err
 	}
-	return NewEmailCode(base, email), nil
+	return NewEmailCode(base, email)
 }
 
 func (g *codeGenerator) NewEcdsaCode(
 	typ CodeType, userID int64, chain, address string,
 ) (*EcdsaCode, error) {
-	if chain == "" {
-		return nil, ErrEcdsaCodeChainIsEmpty
-	}
-	if address == "" {
-		return nil, ErrEcdsaCodeAddressIsEmpty
-	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err
 	}
-	return NewEcdsaCode(base, chain, address), nil
+	return NewEcdsaCode(base, chain, address)
 }

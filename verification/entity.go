@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// timeNow is a package-level function variable for time.Now.
+// Override in tests to make EcdsaCode generation deterministic.
+var timeNow = time.Now
+
 type CodeType string
 
 // ChinaCountryCode is the country code for mainland China.
@@ -16,12 +20,11 @@ type Code struct {
 	Type       CodeType `json:"type"`
 	Sequence   string   `json:"sequence"`
 	CodeLength int32    `json:"code_length"`
-	Code       string   `json:"code"`
-	Content    string   `json:"content"`
+	Value      string   `json:"value"`
 }
 
-// VerificationCode returns the code string.
-func (c Code) VerificationCode() string { return c.Code }
+// GetValue returns the verification code string.
+func (c Code) GetValue() string { return c.Value }
 
 // GetSequence returns the sequence identifier.
 func (c Code) GetSequence() string { return c.Sequence }
@@ -31,7 +34,7 @@ func (c Code) GetType() CodeType { return c.Type }
 
 // validate checks that common base fields are populated.
 func (c Code) validate() error {
-	if c.Code == "" {
+	if c.Value == "" {
 		return ErrCodeIsEmpty
 	}
 	if c.Type == "" {
@@ -52,15 +55,17 @@ func (c MobileCode) CacheKeyParts() []string { return []string{c.Sequence, c.Mob
 func (c MobileCode) LimitKeyParts() []string { return []string{c.Mobile, c.CountryCode} }
 
 // NewMobileCode creates a MobileCode from a base Code.
-func NewMobileCode(base Code, mobile, countryCode string) *MobileCode {
-	return &MobileCode{Code: base, Mobile: mobile, CountryCode: countryCode}
+// Returns an error if required fields are missing.
+func NewMobileCode(base Code, mobile, countryCode string) (*MobileCode, error) {
+	mc := &MobileCode{Code: base, Mobile: mobile, CountryCode: countryCode}
+	if err := mc.Validate(); err != nil {
+		return nil, err
+	}
+	return mc, nil
 }
 
 // Validate checks that all required fields are populated.
-func (c *MobileCode) Validate() error {
-	if c == nil {
-		return ErrNilMobileCode
-	}
+func (c MobileCode) Validate() error {
 	if c.Mobile == "" {
 		return ErrMobileCodeMobileIsEmpty
 	}
@@ -81,15 +86,17 @@ func (c EmailCode) CacheKeyParts() []string { return []string{c.Sequence, c.Emai
 func (c EmailCode) LimitKeyParts() []string { return []string{c.Email} }
 
 // NewEmailCode creates an EmailCode from a base Code.
-func NewEmailCode(base Code, email string) *EmailCode {
-	return &EmailCode{Code: base, Email: email}
+// Returns an error if required fields are missing.
+func NewEmailCode(base Code, email string) (*EmailCode, error) {
+	ec := &EmailCode{Code: base, Email: email}
+	if err := ec.Validate(); err != nil {
+		return nil, err
+	}
+	return ec, nil
 }
 
 // Validate checks that all required fields are populated.
-func (c *EmailCode) Validate() error {
-	if c == nil {
-		return ErrNilEmailCode
-	}
+func (c EmailCode) Validate() error {
 	if c.Email == "" {
 		return ErrEmailCodeEmailIsEmpty
 	}
@@ -109,17 +116,18 @@ func (c EcdsaCode) LimitKeyParts() []string { return []string{c.Chain, c.Address
 
 // NewEcdsaCode creates an EcdsaCode from a base Code.
 // Appends a timestamp to the code for ECDSA challenge uniqueness.
-func NewEcdsaCode(base Code, chain, address string) *EcdsaCode {
-	base.Code = fmt.Sprintf("%s-%d", base.Code, time.Now().UnixNano())
-	base.Content = fmt.Sprintf("Your verification code is: %s.", base.Code)
-	return &EcdsaCode{Code: base, Chain: chain, Address: address}
+// Returns an error if required fields are missing.
+func NewEcdsaCode(base Code, chain, address string) (*EcdsaCode, error) {
+	base.Value = fmt.Sprintf("%s-%d", base.Value, timeNow().UnixNano())
+	ec := &EcdsaCode{Code: base, Chain: chain, Address: address}
+	if err := ec.Validate(); err != nil {
+		return nil, err
+	}
+	return ec, nil
 }
 
 // Validate checks that all required fields are populated.
-func (c *EcdsaCode) Validate() error {
-	if c == nil {
-		return ErrNilEcdsaCode
-	}
+func (c EcdsaCode) Validate() error {
 	if c.Chain == "" {
 		return ErrEcdsaCodeChainIsEmpty
 	}
@@ -138,12 +146,13 @@ type VerificationCode interface {
 // It combines the type-set restriction with all required method behaviors.
 type CodeConstraint interface {
 	VerificationCode
-	VerificationCode() string // returns the raw code string for comparison
-	Medium() string           // e.g. "MOBILE", "EMAIL", "ECDSA"
-	CacheKeyParts() []string  // e.g. [sequence, mobile, countryCode]
-	LimitKeyParts() []string  // e.g. [mobile, countryCode]  (no sequence)
+	GetValue() string        // returns the raw code string for comparison
+	Medium() string          // e.g. "MOBILE", "EMAIL", "ECDSA"
+	CacheKeyParts() []string // e.g. [sequence, mobile, countryCode]
+	LimitKeyParts() []string // e.g. [mobile, countryCode]  (no sequence)
 	GetSequence() string
 	GetType() CodeType
+	Validate() error // validates all required fields
 }
 
 // CodeSender sends a verification code.

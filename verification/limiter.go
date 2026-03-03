@@ -8,13 +8,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const expectedResultLen = 4
-
-// fixedWindowScript is a Lua script for fixed-window rate limiting.
-var fixedWindowScript = redis.NewScript(`
-local key        = KEYS[1]
-local limit      = tonumber(ARGV[1])
-local window_ms  = tonumber(ARGV[2])
+// allowScript atomically increments a fixed-window counter and checks the limit.
+var allowScript = redis.NewScript(`
+local key       = KEYS[1]
+local limit     = tonumber(ARGV[1])
+local window_ms = tonumber(ARGV[2])
 
 redis.call('SET', key, 0, 'PX', window_ms, 'NX')
 local current = redis.call('INCR', key)
@@ -33,68 +31,53 @@ end
 return {allowed, current, limit, ttl}
 `)
 
-// LimitDecision captures a single limiter evaluation result.
-type LimitDecision struct {
-	Allowed bool          // whether the action is allowed
-	Count   int64         // current count in the window
-	Limit   int64         // configured limit
-	ResetIn time.Duration // time until the window resets
+// undoScript atomically decrements a counter, flooring at zero.
+var undoScript = redis.NewScript(`
+local val = redis.call('DECR', KEYS[1])
+if val < 0 then
+  redis.call('SET', KEYS[1], 0, 'KEEPTTL')
+end
+return val
+`)
+
+// RateLimiterConfig holds the fixed-window rate limiter policy.
+type RateLimiterConfig struct {
+	Limit    int64         // max actions per window
+	Window   time.Duration // window duration
+	LimitErr error         // sentinel wrapped in *RateLimitError when exceeded
 }
 
-// RateLimiter provides generic fixed-window rate limiting.
-type RateLimiter interface {
-	Allow(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error)
-	Rollback(ctx context.Context, key string) error
-	Delete(ctx context.Context, key string) error
-}
-
-// RedisRateLimiter implements RateLimiter backed by Redis + Lua.
-type RedisRateLimiter struct {
+// RateLimiter provides fixed-window rate limiting backed by Redis.
+// Configuration is bound at construction time.
+type RateLimiter struct {
 	client redis.UniversalClient
+	cfg    RateLimiterConfig
 }
 
-// NewRedisRateLimiter creates a RateLimiter backed by the given Redis client.
-func NewRedisRateLimiter(client redis.UniversalClient) RateLimiter {
-	return &RedisRateLimiter{client: client}
+// NewRateLimiter creates a RateLimiter with the given policy.
+func NewRateLimiter(client redis.UniversalClient, cfg RateLimiterConfig) *RateLimiter {
+	return &RateLimiter{client: client, cfg: cfg}
 }
 
-func (l *RedisRateLimiter) Allow(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error) {
-	if window <= 0 {
-		return nil, fmt.Errorf("invalid window duration: %d", window)
-	}
-	if limit <= 0 {
-		return nil, fmt.Errorf("invalid limit: %d", limit)
-	}
-	res, err := fixedWindowScript.Run(ctx, l.client, []string{key}, limit, window.Milliseconds()).Int64Slice()
+// Allow increments the counter for key.
+// Returns nil if allowed, *RateLimitError if exceeded, or an error on failure.
+func (l *RateLimiter) Allow(ctx context.Context, key string) error {
+	res, err := allowScript.Run(ctx, l.client, []string{key}, l.cfg.Limit, l.cfg.Window.Milliseconds()).Int64Slice()
 	if err != nil {
-		return nil, fmt.Errorf("limiter eval failed: %w", err)
+		return fmt.Errorf("limiter: %w", err)
 	}
-	if len(res) != expectedResultLen {
-		return nil, fmt.Errorf("limiter eval unexpected result length: got %d, want %d", len(res), expectedResultLen)
-	}
-	return &LimitDecision{
-		Allowed: res[0] == 1,
-		Count:   res[1],
-		Limit:   res[2],
-		ResetIn: time.Duration(res[3]) * time.Millisecond,
-	}, nil
-}
-
-func (l *RedisRateLimiter) Rollback(ctx context.Context, key string) error {
-	val, err := l.client.Decr(ctx, key).Result()
-	if err != nil {
-		return fmt.Errorf("verification: rollback failed: %w", err)
-	}
-	// If the counter dropped below zero (shouldn't happen, but be safe), reset to 0.
-	if val < 0 {
-		_ = l.client.Set(ctx, key, 0, redis.KeepTTL).Err()
+	if res[0] != 1 {
+		return &RateLimitError{Err: l.cfg.LimitErr, RetryIn: time.Duration(res[3]) * time.Millisecond}
 	}
 	return nil
 }
 
-func (l *RedisRateLimiter) Delete(ctx context.Context, key string) error {
-	if err := l.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("verification: redis del failed: %w", err)
-	}
-	return nil
+// Undo decrements the counter (e.g. to reverse a failed send attempt).
+func (l *RateLimiter) Undo(ctx context.Context, key string) error {
+	return undoScript.Run(ctx, l.client, []string{key}).Err()
+}
+
+// Reset removes the counter key entirely.
+func (l *RateLimiter) Reset(ctx context.Context, key string) error {
+	return l.client.Del(ctx, key).Err()
 }

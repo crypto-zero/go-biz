@@ -2,6 +2,8 @@ package verification
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,25 +12,45 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// CodeStore[T] provides typed CRUD for verification codes.
-type CodeStore[T VerificationCode] interface {
-	Set(ctx context.Context, key string, code *T, expire time.Duration) error
-	Peek(ctx context.Context, key string) (*T, error)
-	Delete(ctx context.Context, key string) error
+// codeJSONKey is the JSON field name for the verification code.
+// Must match the json tag on Code.Value.
+const codeJSONKey = "value"
+
+// hashCode returns the hex-encoded SHA-256 hash of a verification code string.
+func hashCode(code string) string {
+	h := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(h[:])
 }
 
-// RedisCodeStore[T] implements CodeStore[T] backed by Redis + JSON.
-type RedisCodeStore[T VerificationCode] struct {
+// CodeStore[T] provides typed CRUD for verification codes backed by Redis + JSON.
+// The verification code is stored as a SHA-256 hash to prevent plaintext
+// exposure in the event of unauthorized Redis access.
+type CodeStore[T VerificationCode] struct {
 	client redis.UniversalClient
 }
 
-// NewRedisCodeStore creates a CodeStore[T] backed by the given Redis client.
-func NewRedisCodeStore[T VerificationCode](client redis.UniversalClient) CodeStore[T] {
-	return &RedisCodeStore[T]{client: client}
+// NewCodeStore creates a CodeStore[T] backed by the given Redis client.
+func NewCodeStore[T VerificationCode](client redis.UniversalClient) *CodeStore[T] {
+	return &CodeStore[T]{client: client}
 }
 
-func (s *RedisCodeStore[T]) Set(ctx context.Context, key string, code *T, expire time.Duration) error {
+func (s *CodeStore[T]) Set(ctx context.Context, key string, code *T, expire time.Duration) error {
 	data, err := json.Marshal(code)
+	if err != nil {
+		return fmt.Errorf("verification: encode failed: %w", err)
+	}
+	// Replace the plaintext code with its hash in the JSON payload.
+	var m map[string]json.RawMessage
+	if err = json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("verification: encode failed: %w", err)
+	}
+	raw, ok := m[codeJSONKey]
+	if !ok {
+		return fmt.Errorf("verification: missing %q field in JSON payload", codeJSONKey)
+	}
+	hashed, _ := json.Marshal(hashCode(extractJSONString(raw)))
+	m[codeJSONKey] = hashed
+	data, err = json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("verification: encode failed: %w", err)
 	}
@@ -38,7 +60,14 @@ func (s *RedisCodeStore[T]) Set(ctx context.Context, key string, code *T, expire
 	return nil
 }
 
-func (s *RedisCodeStore[T]) Peek(ctx context.Context, key string) (*T, error) {
+// extractJSONString extracts a raw JSON string value (removes quotes).
+func extractJSONString(raw json.RawMessage) string {
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
+}
+
+func (s *CodeStore[T]) Peek(ctx context.Context, key string) (*T, error) {
 	data, err := s.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, ErrCodeNotFound
@@ -53,9 +82,10 @@ func (s *RedisCodeStore[T]) Peek(ctx context.Context, key string) (*T, error) {
 	return &v, nil
 }
 
-func (s *RedisCodeStore[T]) Delete(ctx context.Context, key string) error {
-	if err := s.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("verification: redis del failed: %w", err)
+func (s *CodeStore[T]) Delete(ctx context.Context, key string) (bool, error) {
+	n, err := s.client.Del(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("verification: redis del failed: %w", err)
 	}
-	return nil
+	return n > 0, nil
 }

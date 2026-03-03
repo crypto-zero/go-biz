@@ -3,6 +3,7 @@ package verification
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -10,37 +11,37 @@ import (
 
 // OTPConfig groups the policy/configuration for a single-channel OTPService.
 type OTPConfig struct {
-	Prefix             CodeCacheKeyPrefix
-	TTL                time.Duration // code expiration time
-	MaxSendAttempts    int64         // max sends per window per identifier
-	SendWindow         time.Duration // send rate-limit window
-	MaxVerifyIncorrect int64         // max wrong attempts before lockout
-	VerifyWindow       time.Duration // verify rate-limit window
-	SendLimitErr       error         // returned when send limit is exceeded
-	VerifyLimitErr     error         // returned when verify limit is exceeded
+	Prefix CodeCacheKeyPrefix
+	TTL    time.Duration     // code expiration time
+	Send   RateLimiterConfig // send rate-limit policy
+	Verify RateLimiterConfig // verify rate-limit policy
 }
 
 // DefaultOTPConfig returns an OTPConfig with sensible, secure defaults.
 func DefaultOTPConfig(prefix CodeCacheKeyPrefix) OTPConfig {
 	return OTPConfig{
-		Prefix:             prefix,
-		TTL:                5 * time.Minute,
-		MaxSendAttempts:    1,
-		SendWindow:         1 * time.Minute,
-		MaxVerifyIncorrect: 5,
-		VerifyWindow:       1 * time.Hour,
-		SendLimitErr:       ErrSendFailed, // Caller should override with specific error if desired
-		VerifyLimitErr:     ErrCodeIncorrect,
+		Prefix: prefix,
+		TTL:    5 * time.Minute,
+		Send: RateLimiterConfig{
+			Limit:    1,
+			Window:   1 * time.Minute,
+			LimitErr: ErrSendFailed,
+		},
+		Verify: RateLimiterConfig{
+			Limit:    5,
+			Window:   5 * time.Minute,
+			LimitErr: ErrCodeIncorrect,
+		},
 	}
 }
 
 // OTPService[T] manages OTP send/verify for a single verification code type.
 type OTPService[T CodeConstraint] struct {
-	store         CodeStore[T]
+	store         *CodeStore[T]
 	keys          *CacheKeyBuilder
 	sender        CodeSender[T]
-	sendLimiter   RateLimiter
-	verifyLimiter RateLimiter
+	sendLimiter   *RateLimiter
+	verifyLimiter *RateLimiter
 	cfg           OTPConfig
 }
 
@@ -53,11 +54,11 @@ func NewOTPService[T CodeConstraint](
 	sender CodeSender[T],
 ) *OTPService[T] {
 	return &OTPService[T]{
-		store:         NewRedisCodeStore[T](client),
+		store:         NewCodeStore[T](client),
 		keys:          NewCacheKeyBuilder(cfg.Prefix),
 		sender:        sender,
-		sendLimiter:   NewRedisRateLimiter(client),
-		verifyLimiter: NewRedisRateLimiter(client),
+		sendLimiter:   NewRateLimiter(client, cfg.Send),
+		verifyLimiter: NewRateLimiter(client, cfg.Verify),
 		cfg:           cfg,
 	}
 }
@@ -74,12 +75,15 @@ func (s *OTPService[T]) Send(ctx context.Context, code *T) (string, error) {
 }
 
 // Verify checks the input code against the stored code.
-// keyParts should match the CacheKeyParts of the original code (e.g., sequence, mobile, countryCode).
-func (s *OTPService[T]) Verify(ctx context.Context, typ CodeType, input string, keyParts ...string) error {
-	var zero T
-	medium := zero.Medium()
-	codeKey := s.keys.CodeKey(medium, typ, keyParts...)
-	incorrectKey := s.keys.IncorrectKey(medium, typ, keyParts...)
+// probe should be a zero-value-like instance with identity fields populated
+// (e.g., Sequence, Mobile, CountryCode for MobileCode) — the Code field is ignored.
+// This design ensures the same CacheKeyParts()/Medium()/GetType() logic used in Send
+// is also used here, eliminating key-construction mismatches.
+func (s *OTPService[T]) Verify(ctx context.Context, input string, probe *T) error {
+	c := *probe
+	medium := c.Medium()
+	codeKey := s.keys.CodeKey(medium, c.GetType(), c.CacheKeyParts()...)
+	incorrectKey := s.keys.IncorrectKey(medium, c.GetType(), c.CacheKeyParts()...)
 	return s.verifyCode(ctx, codeKey, incorrectKey, input)
 }
 
@@ -87,40 +91,40 @@ func (s *OTPService[T]) Verify(ctx context.Context, typ CodeType, input string, 
 //
 // The flow is designed to be race-safe:
 //  1. Peek the stored code (non-destructive read).
-//  2. If correct → delete code, clear incorrect counter, return nil.
-//  3. If wrong  → atomically increment incorrect counter (Lua script).
-//  4. If the atomic increment shows the limit is exceeded → delete code, return limitExceededErr.
-//  5. Otherwise → return ErrCodeIncorrect.
-//
-// This avoids the TOCTOU race between read and increment
-// that could allow concurrent requests to bypass the limit.
+//  2. If correct → atomically delete code (prevents concurrent double-consumption),
+//     clear incorrect counter, return nil.
+//  3. If wrong  → atomically increment incorrect counter via limiter.
+//     The limiter returns *RateLimitError when exceeded → clean up and propagate.
+//  4. Otherwise → return ErrCodeIncorrect.
 func (s *OTPService[T]) verifyCode(ctx context.Context, codeKey, incorrectKey, input string) error {
 	// 1. Peek the stored code.
 	stored, err := s.store.Peek(ctx, codeKey)
 	if err != nil {
-		return err // ErrCodeNotFound if already deleted by a previous limit-exceeded cleanup
+		return err
 	}
 
 	// 2. Correct code → success path (constant-time compare to prevent timing attacks).
-	if subtle.ConstantTimeCompare([]byte((*stored).VerificationCode()), []byte(input)) == 1 {
-		if err = s.store.Delete(ctx, codeKey); err != nil {
-			return err
+	//    The stored code is a SHA-256 hash; hash the user input before comparing.
+	if subtle.ConstantTimeCompare([]byte((*stored).GetValue()), []byte(hashCode(input))) == 1 {
+		deleted, err := s.store.Delete(ctx, codeKey)
+		// If another concurrent request successfully deleted the code before us,
+		// we must not return success, otherwise an OTP is consumed twice.
+		if err == nil && !deleted {
+			return ErrCodeNotFound
 		}
-		_ = s.verifyLimiter.Delete(ctx, incorrectKey)
+		_ = s.verifyLimiter.Reset(ctx, incorrectKey)
 		return nil
 	}
 
-	// 3. Wrong code → atomically increment the incorrect counter.
-	decision, err := s.verifyLimiter.Allow(ctx, incorrectKey, s.cfg.MaxVerifyIncorrect, s.cfg.VerifyWindow)
-	if err != nil {
-		return ErrCodeIncorrect
-	}
-
-	// 4. If this attempt caused the limit to be exceeded → clean up.
-	if decision != nil && !decision.Allowed {
-		_ = s.store.Delete(ctx, codeKey)
-		_ = s.verifyLimiter.Delete(ctx, incorrectKey)
-		return &RateLimitError{Err: s.cfg.VerifyLimitErr, RetryIn: decision.ResetIn}
+	// 3. Wrong code → the limiter handles increment + limit check internally.
+	//    *RateLimitError → limit exceeded; infrastructure error → propagate directly.
+	if err := s.verifyLimiter.Allow(ctx, incorrectKey); err != nil {
+		var rlErr *RateLimitError
+		if errors.As(err, &rlErr) {
+			_, _ = s.store.Delete(ctx, codeKey)
+			_ = s.verifyLimiter.Reset(ctx, incorrectKey)
+		}
+		return err
 	}
 
 	return ErrCodeIncorrect
@@ -129,24 +133,25 @@ func (s *OTPService[T]) verifyCode(ctx context.Context, codeKey, incorrectKey, i
 // sendCode performs the common OTP send flow: rate-limit check → store code → optional send.
 // sendFn is called after storing (e.g. to send SMS/email); on failure the code is rolled back.
 // Pass nil for sendFn if no external delivery is needed (e.g. ECDSA challenge).
+//
+// Design note: each code's CacheKeyParts includes the unique Sequence, so consecutive
+// sends for the same user/identifier produce independent Redis keys. This means a
+// rollback (store.Delete + sendLimiter.Undo) on send failure only affects the
+// current attempt and never removes a previously sent, still-valid code.
 func (s *OTPService[T]) sendCode(ctx context.Context, code *T, sendFn func() error) (string, error) {
 	c := *code // dereference to call interface methods on value
 	limitKey := s.keys.LimitKey(c.Medium(), c.GetType(), c.LimitKeyParts()...)
-	allow, err := s.sendLimiter.Allow(ctx, limitKey, s.cfg.MaxSendAttempts, s.cfg.SendWindow)
-	if err != nil {
+	if err := s.sendLimiter.Allow(ctx, limitKey); err != nil {
 		return "", err
 	}
-	if !allow.Allowed {
-		return "", &RateLimitError{Err: s.cfg.SendLimitErr, RetryIn: allow.ResetIn}
-	}
 	codeKey := s.keys.CodeKey(c.Medium(), c.GetType(), c.CacheKeyParts()...)
-	if err = s.store.Set(ctx, codeKey, code, s.cfg.TTL); err != nil {
+	if err := s.store.Set(ctx, codeKey, code, s.cfg.TTL); err != nil {
 		return "", err
 	}
 	if sendFn != nil {
-		if err = sendFn(); err != nil {
-			_ = s.store.Delete(ctx, codeKey)
-			_ = s.sendLimiter.Rollback(ctx, limitKey)
+		if err := sendFn(); err != nil {
+			_, _ = s.store.Delete(ctx, codeKey)
+			_ = s.sendLimiter.Undo(ctx, limitKey)
 			return "", err
 		}
 	}

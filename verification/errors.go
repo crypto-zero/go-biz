@@ -2,6 +2,7 @@ package verification
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -13,10 +14,11 @@ type RateLimitError struct {
 
 // Error implements the error interface.
 func (e *RateLimitError) Error() string {
+	msg := "rate limit exceeded"
 	if e.Err != nil {
-		return e.Err.Error()
+		msg = e.Err.Error()
 	}
-	return "rate limit exceeded"
+	return fmt.Sprintf("%s (retry in %s)", msg, e.RetryIn)
 }
 
 // Unwrap returns the underlying error.
@@ -49,8 +51,6 @@ var (
 	// ErrEcdsaVerifyLimitExceeded indicates that the ecdsa address has exceeded the limit for verifying OTPs.
 	ErrEcdsaVerifyLimitExceeded = errors.New("ecdsa verify OTP limit exceeded")
 
-	// ErrNilMobileCode represents a nil mobile code error.
-	ErrNilMobileCode = errors.New("mobile code is nil")
 	// ErrMobileCodeMobileIsEmpty represents an empty mobile error.
 	ErrMobileCodeMobileIsEmpty = errors.New("mobile code mobile is empty")
 	// ErrMobileCodeCountryCodeIsEmpty represents an empty country code error.
@@ -58,15 +58,11 @@ var (
 	// ErrUnsupportedCountryCode represents an unsupported country code error.
 	ErrUnsupportedCountryCode = errors.New("unsupported country code")
 
-	// ErrNilEmailCode represents a nil email code error.
-	ErrNilEmailCode = errors.New("email code is nil")
 	// ErrEmailCodeEmailIsEmpty represents an empty email error.
 	ErrEmailCodeEmailIsEmpty = errors.New("email code email is empty")
 	// ErrEmailTemplateNotFound represents an email template not found error.
 	ErrEmailTemplateNotFound = errors.New("email template not found")
 
-	// ErrNilEcdsaCode represents a nil ecdsa code error.
-	ErrNilEcdsaCode = errors.New("ecdsa code is nil")
 	// ErrEcdsaCodeChainIsEmpty represents an empty chain error.
 	ErrEcdsaCodeChainIsEmpty = errors.New("ecdsa code chain is empty")
 	// ErrEcdsaCodeAddressIsEmpty represents an empty address error.
