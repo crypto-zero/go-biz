@@ -119,7 +119,8 @@ func TestVerification_CodeStore_Basics(t *testing.T) {
 		emailCode, err := emailStore.Peek(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, emailCode)
-		assert.Equal(t, hashCode("666666"), emailCode.Code.Value)
+		assert.Equal(t, hashCode("666666"), emailCode.Code.Digest)
+		assert.Empty(t, emailCode.Code.Value) // Plaintext is not serialized
 	})
 
 	t.Run("email expired", func(t *testing.T) {
@@ -138,7 +139,8 @@ func TestVerification_CodeStore_Basics(t *testing.T) {
 		mobileCode, err := mobileStore.Peek(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, mobileCode)
-		assert.Equal(t, hashCode("666666"), mobileCode.Code.Value)
+		assert.Equal(t, hashCode("666666"), mobileCode.Code.Digest)
+		assert.Empty(t, mobileCode.Code.Value) // Plaintext is not serialized
 	})
 
 	t.Run("ecdsa set/get", func(t *testing.T) {

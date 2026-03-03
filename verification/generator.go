@@ -63,6 +63,7 @@ func (g *codeGenerator) newBaseCode(typ CodeType, userID int64) (Code, error) {
 		Sequence:   seq,
 		CodeLength: clen,
 		Value:      code,
+		Digest:     hashCode(code),
 	}, nil
 }
 

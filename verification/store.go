@@ -23,13 +23,7 @@ func NewCodeStore[T VerificationCode](client redis.UniversalClient) *CodeStore[T
 }
 
 func (s *CodeStore[T]) Set(ctx context.Context, key string, code *T, expire time.Duration) error {
-	// Hash the code value before marshaling — avoids double marshal/unmarshal.
-	// All T types embed Code, so *T always has hashValue() via promotion.
-	c := *code
-	if h, ok := any(&c).(interface{ hashValue() }); ok {
-		h.hashValue()
-	}
-	data, err := json.Marshal(&c)
+	data, err := json.Marshal(code)
 	if err != nil {
 		return fmt.Errorf("verification: encode failed: %w", err)
 	}

@@ -28,14 +28,15 @@ type Code struct {
 	Type       CodeType `json:"type"`
 	Sequence   string   `json:"sequence"`
 	CodeLength int32    `json:"code_length"`
-	Value      string   `json:"value"`
+	Value      string   `json:"-"`      // Plaintext code, in-memory only, never persisted
+	Digest     string   `json:"digest"` // SHA-256 digest for storage and comparison
 }
 
-// GetValue returns the verification code string.
+// GetValue returns the plaintext verification code (transient, in-memory only).
 func (c Code) GetValue() string { return c.Value }
 
-// hashValue replaces the plaintext code with its SHA-256 hash (in-place).
-func (c *Code) hashValue() { c.Value = hashCode(c.Value) }
+// GetDigest returns the SHA-256 digest of the verification code.
+func (c Code) GetDigest() string { return c.Digest }
 
 // GetSequence returns the sequence identifier.
 func (c Code) GetSequence() string { return c.Sequence }
@@ -45,7 +46,7 @@ func (c Code) GetType() CodeType { return c.Type }
 
 // validate checks that common base fields are populated.
 func (c Code) validate() error {
-	if c.Value == "" {
+	if c.Digest == "" {
 		return ErrCodeIsEmpty
 	}
 	if c.Type == "" {
@@ -130,6 +131,7 @@ func (c EcdsaCode) LimitKeyParts() []string { return []string{c.Chain, c.Address
 // Returns an error if required fields are missing.
 func NewEcdsaCode(base Code, chain, address string) (*EcdsaCode, error) {
 	base.Value = fmt.Sprintf("%s-%d", base.Value, timeNow().UnixNano())
+	base.Digest = hashCode(base.Value)
 	ec := &EcdsaCode{Code: base, Chain: chain, Address: address}
 	if err := ec.Validate(); err != nil {
 		return nil, err
@@ -157,7 +159,8 @@ type VerificationCode interface {
 // It combines the type-set restriction with all required method behaviors.
 type CodeConstraint interface {
 	VerificationCode
-	GetValue() string        // returns the raw code string for comparison
+	GetValue() string        // returns the plaintext code for sending
+	GetDigest() string       // returns the SHA-256 digest for comparison
 	Medium() string          // e.g. "MOBILE", "EMAIL", "ECDSA"
 	CacheKeyParts() []string // e.g. [sequence, mobile, countryCode]
 	LimitKeyParts() []string // e.g. [mobile, countryCode]  (no sequence)

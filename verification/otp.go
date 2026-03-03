@@ -105,7 +105,7 @@ func (s *OTPService[T]) verifyCode(ctx context.Context, codeKey, incorrectKey, i
 
 	// 2. Correct code → success path (constant-time compare to prevent timing attacks).
 	//    The stored code is a SHA-256 hash; hash the user input before comparing.
-	if subtle.ConstantTimeCompare([]byte((*stored).GetValue()), []byte(hashCode(input))) == 1 {
+	if subtle.ConstantTimeCompare([]byte((*stored).GetDigest()), []byte(hashCode(input))) == 1 {
 		deleted, err := s.store.Delete(ctx, codeKey)
 		// If another concurrent request successfully deleted the code before us,
 		// we must not return success, otherwise an OTP is consumed twice.
