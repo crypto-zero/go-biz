@@ -2,8 +2,6 @@ package verification
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,16 +9,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
-
-// codeJSONKey is the JSON field name for the verification code.
-// Must match the json tag on Code.Value.
-const codeJSONKey = "value"
-
-// hashCode returns the hex-encoded SHA-256 hash of a verification code string.
-func hashCode(code string) string {
-	h := sha256.Sum256([]byte(code))
-	return hex.EncodeToString(h[:])
-}
 
 // CodeStore[T] provides typed CRUD for verification codes backed by Redis + JSON.
 // The verification code is stored as a SHA-256 hash to prevent plaintext
@@ -35,22 +23,13 @@ func NewCodeStore[T VerificationCode](client redis.UniversalClient) *CodeStore[T
 }
 
 func (s *CodeStore[T]) Set(ctx context.Context, key string, code *T, expire time.Duration) error {
-	data, err := json.Marshal(code)
-	if err != nil {
-		return fmt.Errorf("verification: encode failed: %w", err)
+	// Hash the code value before marshaling — avoids double marshal/unmarshal.
+	// All T types embed Code, so *T always has hashValue() via promotion.
+	c := *code
+	if h, ok := any(&c).(interface{ hashValue() }); ok {
+		h.hashValue()
 	}
-	// Replace the plaintext code with its hash in the JSON payload.
-	var m map[string]json.RawMessage
-	if err = json.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("verification: encode failed: %w", err)
-	}
-	raw, ok := m[codeJSONKey]
-	if !ok {
-		return fmt.Errorf("verification: missing %q field in JSON payload", codeJSONKey)
-	}
-	hashed, _ := json.Marshal(hashCode(extractJSONString(raw)))
-	m[codeJSONKey] = hashed
-	data, err = json.Marshal(m)
+	data, err := json.Marshal(&c)
 	if err != nil {
 		return fmt.Errorf("verification: encode failed: %w", err)
 	}
@@ -58,13 +37,6 @@ func (s *CodeStore[T]) Set(ctx context.Context, key string, code *T, expire time
 		return fmt.Errorf("verification: redis set failed: %w", err)
 	}
 	return nil
-}
-
-// extractJSONString extracts a raw JSON string value (removes quotes).
-func extractJSONString(raw json.RawMessage) string {
-	var s string
-	_ = json.Unmarshal(raw, &s)
-	return s
 }
 
 func (s *CodeStore[T]) Peek(ctx context.Context, key string) (*T, error) {

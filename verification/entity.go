@@ -2,9 +2,17 @@ package verification
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
+
+// hashCode returns the hex-encoded SHA-256 hash of a verification code string.
+func hashCode(code string) string {
+	h := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(h[:])
+}
 
 // timeNow is a package-level function variable for time.Now.
 // Override in tests to make EcdsaCode generation deterministic.
@@ -25,6 +33,9 @@ type Code struct {
 
 // GetValue returns the verification code string.
 func (c Code) GetValue() string { return c.Value }
+
+// hashValue replaces the plaintext code with its SHA-256 hash (in-place).
+func (c *Code) hashValue() { c.Value = hashCode(c.Value) }
 
 // GetSequence returns the sequence identifier.
 func (c Code) GetSequence() string { return c.Sequence }
