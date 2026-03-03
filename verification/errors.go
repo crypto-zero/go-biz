@@ -3,6 +3,9 @@ package verification
 import "errors"
 
 var (
+	// ErrSendFailed represents a generic send failure.
+	ErrSendFailed = errors.New("send failed")
+
 	// ErrCodeNotFound represents a verification code not found error.
 	ErrCodeNotFound = errors.New("verification code not found")
 	// ErrCodeTypeIsEmpty represents a verification code type is empty error.

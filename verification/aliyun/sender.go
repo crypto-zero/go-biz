@@ -2,17 +2,11 @@ package aliyun
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
 	"github.com/crypto-zero/go-biz/verification"
-)
-
-var (
-	ErrTemplateNotFound = errors.New("template not found")
-	ErrSendFailed       = errors.New("aliyun sms send failed")
 )
 
 // SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
@@ -67,10 +61,10 @@ func (a *SMS) sendMessage(signName, phoneNumber, templateCode, templateParam str
 	request.SetTemplateParam(templateParam)
 	response, err := a.mainlandClient.SendSms(request)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrSendFailed, err)
+		return fmt.Errorf("%w: %w", verification.ErrSendFailed, err)
 	}
 	if response.Body != nil && response.Body.Code != nil && *response.Body.Code != "OK" {
-		return fmt.Errorf("%w, response: %s", ErrSendFailed, response.Body.GoString())
+		return fmt.Errorf("%w, response: %s", verification.ErrSendFailed, response.Body.GoString())
 	}
 	return nil
 }
