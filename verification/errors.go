@@ -22,6 +22,19 @@ var (
 	// ErrEcdsaVerifyLimitExceeded indicates that the ecdsa address has exceeded the limit for verifying OTPs.
 	ErrEcdsaVerifyLimitExceeded = errors.New("ecdsa verify OTP limit exceeded")
 
+	// ErrNilMobileCode represents a nil mobile code error.
+	ErrNilMobileCode = errors.New("mobile code is nil")
+	// ErrMobileCodeMobileIsEmpty represents an empty mobile error.
+	ErrMobileCodeMobileIsEmpty = errors.New("mobile code mobile is empty")
+	// ErrMobileCodeCountryCodeIsEmpty represents an empty country code error.
+	ErrMobileCodeCountryCodeIsEmpty = errors.New("mobile code country code is empty")
+	// ErrMobileCodeCodeIsEmpty represents an empty code error.
+	ErrMobileCodeCodeIsEmpty = errors.New("mobile code code is empty")
+	// ErrMobileCodeTypeIsEmpty represents an empty code type error.
+	ErrMobileCodeTypeIsEmpty = errors.New("mobile code type is empty")
+	// ErrUnsupportedCountryCode represents an unsupported country code error.
+	ErrUnsupportedCountryCode = errors.New("unsupported country code")
+
 	// ErrNilEmailCode represents a nil email code error.
 	ErrNilEmailCode = errors.New("email code is nil")
 	// ErrEmailCodeEmailIsEmpty represents an empty email error.

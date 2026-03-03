@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrTemplateNotFound = errors.New("template not found")
+	ErrSendFailed       = errors.New("aliyun sms send failed")
 )
 
 // SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
@@ -41,39 +42,24 @@ func NewSMS(client *dysms.Client, template verification.TemplateProvider[Templat
 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
 func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
-	if mobileCode == nil {
-		return verification.ErrNilMobileCode
+	if err := mobileCode.Validate(); err != nil {
+		return err
 	}
-	if mobileCode.CountryCode == "" {
-		return verification.ErrMobileCodeCountryCodeIsEmpty
-	}
-	if mobileCode.Mobile == "" {
-		return verification.ErrMobileCodeMobileIsEmpty
-	}
-	if mobileCode.Code.Code == "" {
-		return verification.ErrMobileCodeCodeIsEmpty
-	}
-	if mobileCode.Type == "" {
-		return verification.ErrMobileCodeTypeIsEmpty
+	if mobileCode.CountryCode != verification.ChinaCountryCode {
+		return verification.ErrUnsupportedCountryCode
 	}
 	template, err := a.template.GetTemplate(mobileCode.Type)
 	if err != nil {
 		return err
 	}
-	if err = a.sendMessageWithTemplate(template.SignName,
-		mobileCode.CountryCode, mobileCode.Mobile,
+	return a.sendMessage(template.SignName,
+		mobileCode.Mobile,
 		template.Code, mobileCode.Format(template.ParamsFormat,
-			mobileCode.Code.Code)); err != nil {
-		return err
-	}
-	return nil
+			mobileCode.Code.Code))
 }
 
-// sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
-func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
-	if countryCode != verification.ChinaCountryCode {
-		return verification.ErrUnsupportedCountryCode
-	}
+// sendMessage sends an SMS message using the specified template.
+func (a *SMS) sendMessage(signName, phoneNumber, templateCode, templateParam string) error {
 	request := &dysms.SendSmsRequest{}
 	request.SetSignName(signName)
 	request.SetPhoneNumbers(phoneNumber)
@@ -81,10 +67,10 @@ func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templa
 	request.SetTemplateParam(templateParam)
 	response, err := a.mainlandClient.SendSms(request)
 	if err != nil {
-		return fmt.Errorf("aliyun sms send message failed, err: %w", err)
+		return fmt.Errorf("%w: %w", ErrSendFailed, err)
 	}
-	if response.Body != nil && *response.Body.Code != "OK" {
-		return fmt.Errorf("aliyun sms send message failed, response body :%s", response.Body.GoString())
+	if response.Body != nil && response.Body.Code != nil && *response.Body.Code != "OK" {
+		return fmt.Errorf("%w, response: %s", ErrSendFailed, response.Body.GoString())
 	}
 	return nil
 }

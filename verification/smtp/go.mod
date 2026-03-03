@@ -9,8 +9,6 @@ require (
 	github.com/stretchr/testify v1.10.0
 )
 
-replace github.com/crypto-zero/go-biz/verification => ../
-
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/crypto-zero/go-kit v0.0.0-20250610071112-97b2f51ec745 // indirect

@@ -147,12 +147,12 @@ func testEmailTemplate() testTemplateProvider {
 	return testTemplateProvider{
 		"LOGIN": {
 			Subject:     "Login Code",
-			BodyFormat:  "<p>Your code: <b>%s</b></p>",
+			BodyFormat:  "<p>Your code: <b>{{code}}</b></p>",
 			ContentType: "text/html",
 		},
 		"REGISTER": {
 			Subject:    "Register Code",
-			BodyFormat: "Your code is: %s",
+			BodyFormat: "Your code is: {{code}}",
 			// ContentType defaults to text/plain
 		},
 	}
@@ -315,7 +315,7 @@ func TestSender_RealSend(t *testing.T) {
               Please use the following code to complete your login. This code will expire in 5 minutes.
             </p>
             <div style="background:#f8f5ff;border:2px dashed #8b5cf6;border-radius:8px;padding:20px;text-align:center;margin:0 0 24px;">
-              <span style="font-size:36px;font-weight:700;letter-spacing:8px;color:#6366f1;">%s</span>
+              <span style="font-size:36px;font-weight:700;letter-spacing:8px;color:#6366f1;">{{code}}</span>
             </div>
             <p style="margin:0;color:#9ca3af;font-size:13px;line-height:1.5;">
               If you did not request this code, please ignore this email.

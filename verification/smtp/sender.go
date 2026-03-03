@@ -7,7 +7,9 @@ import (
 	"mime"
 	"net"
 	"net/smtp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crypto-zero/go-biz/verification"
 )
@@ -18,9 +20,9 @@ type Template struct {
 	// e.g., "Your verification code"
 	Subject string `json:"subject"`
 	// BodyFormat is the email body format string.
-	// Use %s as the placeholder for the verification code.
+	// Use {{code}} as the placeholder for the verification code.
 	// Supports both plain text and HTML.
-	// e.g., "<p>Your verification code is: <b>%s</b></p>"
+	// e.g., "<p>Your verification code is: <b>{{code}}</b></p>"
 	BodyFormat string `json:"body_format"`
 	// ContentType specifies the MIME type for the body: "text/plain" or "text/html".
 	// Defaults to "text/plain" if empty.
@@ -39,7 +41,7 @@ type Config struct {
 
 // Addr returns "host:port".
 func (c *Config) Addr() string {
-	return net.JoinHostPort(c.Host, fmt.Sprintf("%d", c.Port))
+	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 }
 
 // Sender implements EmailCodeSender using Go standard library net/smtp.
@@ -61,17 +63,8 @@ func NewSender(config *Config, template verification.TemplateProvider[Template])
 
 // Send sends the email verification code via SMTP.
 func (s *Sender) Send(ctx context.Context, emailCode *verification.EmailCode) error {
-	if emailCode == nil {
-		return verification.ErrNilEmailCode
-	}
-	if emailCode.Email == "" {
-		return verification.ErrEmailCodeEmailIsEmpty
-	}
-	if emailCode.Code.Code == "" {
-		return verification.ErrEmailCodeCodeIsEmpty
-	}
-	if emailCode.Type == "" {
-		return verification.ErrEmailCodeTypeIsEmpty
+	if err := emailCode.Validate(); err != nil {
+		return err
 	}
 
 	tmpl, err := s.template.GetTemplate(emailCode.Type)
@@ -84,7 +77,7 @@ func (s *Sender) Send(ctx context.Context, emailCode *verification.EmailCode) er
 		contentType = "text/plain"
 	}
 
-	body := fmt.Sprintf(tmpl.BodyFormat, emailCode.Code.Code)
+	body := strings.ReplaceAll(tmpl.BodyFormat, "{{code}}", emailCode.Code.Code)
 	msg := s.buildMessage(emailCode.Email, tmpl.Subject, contentType, body)
 
 	if s.config.SSL {
@@ -106,24 +99,22 @@ func (s *Sender) sendWithSTARTTLS(ctx context.Context, to string, msg []byte) er
 		_ = conn.Close()
 		return fmt.Errorf("smtp new client failed: %w", err)
 	}
-	defer client.Close()
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err = client.StartTLS(&tls.Config{ServerName: s.config.Host}); err != nil {
+			_ = client.Close()
+			return fmt.Errorf("smtp STARTTLS failed: %w", err)
+		}
+	}
 
-	// Set deadline from context.
+	// Set deadline after TLS upgrade so it applies to the final connection.
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
 
-	if err = client.Hello("localhost"); err != nil {
-		return fmt.Errorf("smtp EHLO failed: %w", err)
-	}
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err = client.StartTLS(&tls.Config{ServerName: s.config.Host}); err != nil {
-			return fmt.Errorf("smtp STARTTLS failed: %w", err)
-		}
-	}
 	if s.config.Username != "" {
 		auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
 		if err = client.Auth(auth); err != nil {
+			_ = client.Close()
 			return fmt.Errorf("smtp auth failed: %w", err)
 		}
 	}
@@ -144,7 +135,6 @@ func (s *Sender) sendWithSSL(ctx context.Context, to string, msg []byte) error {
 		_ = conn.Close()
 		return fmt.Errorf("smtp new client failed: %w", err)
 	}
-	defer client.Close()
 
 	// Set deadline from context.
 	if deadline, ok := ctx.Deadline(); ok {
@@ -154,35 +144,42 @@ func (s *Sender) sendWithSSL(ctx context.Context, to string, msg []byte) error {
 	if s.config.Username != "" {
 		auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
 		if err = client.Auth(auth); err != nil {
+			_ = client.Close()
 			return fmt.Errorf("smtp auth failed: %w", err)
 		}
 	}
 	return s.sendMessage(client, to, msg)
 }
 
-// sendMessage writes the message envelope and body to an already-authenticated SMTP client.
+// sendMessage writes the message envelope and body, then gracefully closes the SMTP session.
 func (s *Sender) sendMessage(client *smtp.Client, to string, msg []byte) error {
 	if err := client.Mail(s.config.From); err != nil {
+		_ = client.Close()
 		return fmt.Errorf("smtp MAIL FROM failed: %w", err)
 	}
 	if err := client.Rcpt(to); err != nil {
+		_ = client.Close()
 		return fmt.Errorf("smtp RCPT TO failed: %w", err)
 	}
 	w, err := client.Data()
 	if err != nil {
+		_ = client.Close()
 		return fmt.Errorf("smtp DATA failed: %w", err)
 	}
 	if _, err = w.Write(msg); err != nil {
+		_ = client.Close()
 		return fmt.Errorf("smtp write message failed: %w", err)
 	}
 	if err = w.Close(); err != nil {
+		_ = client.Close()
 		return fmt.Errorf("smtp close data writer failed: %w", err)
 	}
 	return client.Quit()
 }
 
-// buildMessage constructs the raw RFC 2822 message bytes.
+// buildMessage constructs the raw RFC 5322 message bytes with required Date and Message-ID headers.
 func (s *Sender) buildMessage(to, subject, contentType, body string) []byte {
+	now := time.Now()
 	var b strings.Builder
 	b.WriteString("From: ")
 	b.WriteString(s.config.From)
@@ -190,6 +187,14 @@ func (s *Sender) buildMessage(to, subject, contentType, body string) []byte {
 	b.WriteString("To: ")
 	b.WriteString(to)
 	b.WriteString("\r\n")
+	b.WriteString("Date: ")
+	b.WriteString(now.Format(time.RFC1123Z))
+	b.WriteString("\r\n")
+	b.WriteString("Message-ID: <")
+	b.WriteString(strconv.FormatInt(now.UnixNano(), 10))
+	b.WriteByte('.')
+	b.WriteString(s.config.From)
+	b.WriteString(">\r\n")
 	b.WriteString("Subject: ")
 	b.WriteString(mime.QEncoding.Encode("UTF-8", subject))
 	b.WriteString("\r\n")

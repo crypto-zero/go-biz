@@ -35,6 +35,9 @@ func NewCodeGenerator(codeLength int) CodeGenerator {
 	return &codeGenerator{codeLength: codeLength}
 }
 
+// DefaultCodeGenerator is a convenience CodeGenerator that produces 6-digit random codes.
+var DefaultCodeGenerator = NewCodeGenerator(6)
+
 // NewTestCodeGenerator creates a generator that always produces the given fixed code.
 // Intended for testing only — do not use in production.
 func NewTestCodeGenerator(code string) CodeGenerator {
