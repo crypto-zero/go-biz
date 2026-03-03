@@ -1,13 +1,15 @@
 # Verification Package
 
-A Go package for handling OTP (One-Time Password) verification codes, supporting mobile SMS, email, and ECDSA signature verification.
+A type-safe, generic OTP (One-Time Password) verification package for Go,
+supporting mobile SMS, email, and ECDSA signature verification channels.
 
 ## Features
 
-- Multi-channel support: mobile SMS, email, ECDSA signature
-- Rate limiting for sending and verification attempts
-- Redis-based atomic operations and cache
-- Configurable code length, TTL, and limits
+- **Generic `OTPService[T]`** — one service per channel, fully type-safe
+- **SHA-256 hashed storage** — plaintext codes (`Value`) are never persisted; only the `Digest` is stored in Redis
+- **Rate limiting** — configurable send and verify limits with automatic cleanup
+- **Redis-backed** — atomic operations via Lua scripts for concurrency safety
+- **Pluggable senders** — implement `CodeSender[T]` for any delivery backend
 
 ## Installation
 
@@ -17,223 +19,169 @@ go get github.com/crypto-zero/go-biz/verification
 
 ## Quick Start
 
-### 1. Initialize Service
+### 1. Create a Code Generator
 
 ```go
-import (
-    "github.com/crypto-zero/go-biz/verification"
-    "github.com/redis/go-redis/v9"
-    "time"
-)
-
-// You need to implement or use existing CodeCache, CodeLimiterCache, MobileCodeSender, CodeGenerator
-var cache verification.CodeCache
-var limiterCache verification.CodeLimiterCache
-var sender verification.MobileCodeSender
-var generator verification.CodeGenerator
-
-otpService := verification.NewOTPService(
-    cache,
-    limiterCache,
-    sender,
-    generator,
-    time.Hour,         // sendWindowDuration
-    10*time.Minute,    // verifyWindowDuration
-    5*time.Minute,     // ttl
-    3,                 // maxSendAttempts
-    3,                 // maxVerifyIncorrect
-)
+gen := verification.NewCodeGenerator(6) // 6-digit codes
 ```
 
-### 2. Send Verification Code
+### 2. Configure and Create a Service
 
 ```go
-sequence, err := otpService.SendMobileOTP(
-    ctx,
-    "LOGIN",
-    12345,           // userID
-    "13800138000",
-    "86",
-)
-if err != nil {
-    // Handle errors
+cfg := verification.DefaultOTPConfig("MY_APP")
+
+// Customize if needed
+cfg.TTL = 5 * time.Minute
+cfg.Send = verification.RateLimiterConfig{
+    Limit: 3, Window: time.Minute,
+    LimitErr: verification.ErrMobileSendLimitExceeded,
 }
+cfg.Verify = verification.RateLimiterConfig{
+    Limit: 5, Window: 5 * time.Minute,
+    LimitErr: verification.ErrMobileVerifyLimitExceeded,
+}
+
+svc := verification.NewOTPService[verification.MobileCode](cfg, redisClient, smsSender)
 ```
 
-#### Send Sequence Diagram
+### 3. Send a Verification Code
+
+```go
+mc, _ := gen.NewMobileCode("LOGIN", userID, "13800138000", "86")
+seq, err := svc.Send(ctx, mc)
+// seq is the unique sequence ID for later verification
+```
+
+### 4. Verify
+
+```go
+probe := &verification.MobileCode{
+    Code:        verification.Code{Type: "LOGIN", Sequence: seq},
+    Mobile:      "13800138000",
+    CountryCode: "86",
+}
+err := svc.Verify(ctx, userInput, probe)
+```
+
+## Architecture
+
+### Send Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant User
+    participant Caller
     participant OTPService
-    participant CodeLimiterCache
-    participant CodeGenerator
-    participant CodeCache
-    participant MobileCodeSender
+    participant RateLimiter
+    participant CodeStore
+    participant CodeSender
 
-    User->>OTPService: SendMobileOTP(typ, userID, mobile, country)
-    OTPService->>CodeLimiterCache: AllowSendMobile(typ, mobile, country, maxSendAttempts, sendWindow)
-    CodeLimiterCache-->>OTPService: LimitDecision{Allowed, ResetIn}
-
+    Caller->>OTPService: Send(ctx, code)
+    OTPService->>RateLimiter: Allow(sendLimitKey)
     alt Allowed
-        OTPService->>CodeGenerator: NewMobileCode(typ, userID, mobile, country)
-        CodeGenerator-->>OTPService: MobileCode{Sequence, Code}
-        OTPService->>CodeCache: SetMobileCode(code, ttl)
-        CodeCache-->>OTPService: OK
-        OTPService->>MobileCodeSender: Send(ctx, code)
-        alt Success
-            MobileCodeSender-->>OTPService: OK
-            OTPService-->>User: return Sequence
-        else Incorrect
-            MobileCodeSender-->>OTPService: error
-            OTPService->>CodeCache: DeleteMobileCode(typ, seq, mobile, country)
-            CodeCache-->>OTPService: OK
-            OTPService-->>User: error
+        OTPService->>CodeStore: Set(key, code, TTL)
+        Note over CodeStore: json.Marshal stores only Digest<br/>(Value has json:"-")
+        OTPService->>CodeSender: Send(ctx, code)
+        alt Send OK
+            OTPService-->>Caller: return Sequence
+        else Send Failed
+            OTPService->>CodeStore: Delete(key)
+            OTPService->>RateLimiter: Undo(sendLimitKey)
+            OTPService-->>Caller: error
         end
-    else RateLimited
-        OTPService-->>User: ErrMobileSendLimitExceeded
+    else Rate Limited
+        OTPService-->>Caller: RateLimitError{RetryIn}
     end
 ```
 
-### 3. Verify Code
-
-```go
-err := otpService.VerifyMobileOTP(
-    ctx,
-    verification.CodeTypeRegister,
-    sequence,
-    "13800138000",
-    "86",
-    "123456",        // user input
-)
-if err != nil {
-    // Handle errors
-}
-```
-
-#### Verify Sequence Diagram
+### Verify Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant User
+    participant Caller
     participant OTPService
-    participant CodeLimiterCache
-    participant CodeCache
+    participant CodeStore
+    participant RateLimiter
 
-    User->>OTPService: VerifyMobileOTP(typ, sequence, mobile, country, input)
-    OTPService->>CodeLimiterCache: GetMobileCodeIncorrectCount(typ, sequence, mobile, country)
-    CodeLimiterCache-->>OTPService: count
-
-    alt count >= maxVerifyIncorrect
-        OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
-        CodeCache-->>OTPService: OK
-        OTPService->>CodeLimiterCache: DeleteMobileCodeIncorrect(typ, sequence, mobile, country)
-        CodeLimiterCache-->>OTPService: OK
-        OTPService-->>User: ErrMobileVerifyLimitExceeded
-    else count < maxVerifyIncorrect
-        OTPService->>CodeCache: PeekMobileCode(typ, sequence, mobile, country)
-        CodeCache-->>OTPService: stored
-        alt input != stored.Code
-            OTPService->>CodeLimiterCache: IncrementMobileCodeIncorrect(typ, sequence, mobile, country, maxIncorrect, verifyWindow)
-            CodeLimiterCache-->>OTPService: {Count, ResetIn}
-            OTPService-->>User: ErrCodeIncorrect
-        else input == stored.Code
-            OTPService->>CodeCache: DeleteMobileCode(typ, sequence, mobile, country)
-            CodeCache-->>OTPService: OK
-            OTPService->>CodeLimiterCache: DeleteMobileCodeIncorrect(typ, sequence, mobile, country)
-            CodeLimiterCache-->>OTPService: OK
-            OTPService-->>User: OK
+    Caller->>OTPService: Verify(ctx, input, probe)
+    OTPService->>CodeStore: Peek(codeKey)
+    alt Code Found
+        OTPService->>OTPService: SHA-256(input) == stored.Digest?
+        alt Match
+            OTPService->>CodeStore: Delete(codeKey)
+            OTPService->>RateLimiter: Reset(incorrectKey)
+            OTPService-->>Caller: nil (success)
+        else Mismatch
+            OTPService->>RateLimiter: Allow(incorrectKey)
+            alt Limit Exceeded
+                OTPService->>CodeStore: Delete(codeKey)
+                OTPService->>RateLimiter: Reset(incorrectKey)
+                OTPService-->>Caller: RateLimitError
+            else Under Limit
+                OTPService-->>Caller: ErrCodeIncorrect
+            end
         end
+    else Not Found
+        OTPService-->>Caller: ErrCodeNotFound
     end
 ```
 
-## Configuration Options
+## Security Model
 
-| Option                | Default      | Description                         |
-|-----------------------|--------------|-------------------------------------|
-| RedisClient           | Required     | Redis client instance               |
-| TTL                   | 5 minutes    | Code validity period                |
-| MobileCodeLength      | 6            | Mobile code length                  |
-| EmailCodeLength       | 6            | Email code length                   |
-| EcdsaCodeLength       | 32           | ECDSA signature length              |
-| MaxVerifyIncorrect    | 3            | Max verification incorrect          |
-| VerifyWindowDuration  | 10 minutes   | Verification incorrect count window |
+| Concern | Solution |
+|---|---|
+| Plaintext exposure in Redis | `Value` field has `json:"-"`; only `Digest` (SHA-256) is persisted |
+| Timing attacks | Constant-time comparison (`crypto/subtle`) for digest matching |
+| Brute force | Configurable verify rate limiter with automatic code deletion on limit |
+| Send abuse | Configurable send rate limiter with rollback on delivery failure |
+| Concurrent double-use | Atomic `Delete` check — second consumer sees `deleted=false` |
+
+## Configuration
+
+```go
+type OTPConfig struct {
+    Prefix CodeCacheKeyPrefix // Redis key prefix
+    TTL    time.Duration      // Code expiration
+    Send   RateLimiterConfig  // Send rate-limit policy
+    Verify RateLimiterConfig  // Verify rate-limit policy
+}
+
+type RateLimiterConfig struct {
+    Limit    int64         // Max attempts within Window
+    Window   time.Duration // Sliding window duration
+    LimitErr error         // Error returned when limit is exceeded
+}
+```
+
+`DefaultOTPConfig(prefix)` provides secure defaults:
+- TTL: 5 minutes
+- Send: 1 per minute
+- Verify: 5 attempts per 5 minutes
 
 ## Error Handling
 
-| Error                              | Description                        |
-|------------------------------------|------------------------------------|
-| ErrMobileSendLimitExceeded         | Send rate limit exceeded           |
-| ErrEmailSendLimitExceeded          | Email send limit exceeded          |
-| ErrMobileVerifyLimitExceeded       | Verification incorrect limit       |
-| ErrEmailVerifyLimitExceeded        | Email verification incorrect limit |
-| ErrCodeIncorrect                   | Incorrect code                     |
-| ErrCodeNotFound                    | Code not found or expired          |
+| Error | Description |
+|---|---|
+| `ErrCodeNotFound` | Code expired or never sent |
+| `ErrCodeIncorrect` | Wrong code (under limit) |
+| `*RateLimitError` | Rate limit exceeded (wraps `LimitErr`, includes `RetryIn`) |
+| `ErrSendFailed` | Delivery backend error |
 
-## SMS/Email Integration
+## Sender Integration
 
-Implement the sender interface or use the built-in Aliyun SMS integration:
+Implement `CodeSender[T]` for your delivery backend:
 
 ```go
-import (
-    "github.com/crypto-zero/go-biz/verification"
-    "github.com/crypto-zero/go-biz/verification/aliyun"
-    dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
-    "context"
-    "time"
-)
-
-// 1. Create Alibaba Cloud Dysms client (refer to Alibaba Cloud SDK docs)
-client := dysms.NewClient(&openapi.Config{
-    // Fill in your Alibaba Cloud credentials and endpoint
-})
-
-// 2. Prepare template map
-templateMap := map[verification.CodeType]*aliyun.Template{
-    verification.CodeTypeRegister: {
-        Code:        "your-template-code",
-        SignName:    "your-sign-name",
-        ParamsFormat: `{"code":"%s"}`,
-    },
-    // Add more types as needed
+type CodeSender[T VerificationCode] interface {
+    Send(ctx context.Context, code *T) error
 }
-
-// 3. Create Aliyun SMS sender
-smsSender := aliyun.NewSMS(client, templateMap)
-
-// 4. Prepare other dependencies (implement these interfaces as needed)
-var cache verification.CodeCache
-var limiterCache verification.CodeLimiterCache
-var generator verification.CodeGenerator
-
-// 5. Create OTP service
-otpService := verification.NewOTPService(
-    cache,
-    limiterCache,
-    smsSender,
-    generator,
-    time.Hour,         // sendWindowDuration
-    10*time.Minute,    // verifyWindowDuration
-    5*time.Minute,     // ttl
-    3,                 // maxSendAttempts
-    3,                 // maxVerifyIncorrect
-)
 ```
 
-## Best Practices
-
-- Set reasonable TTL for codes (5-10 minutes recommended)
-- Configure send rate limits to prevent abuse
-- Limit verification attempts to prevent brute force
-- Log all critical operations
-- Monitor abnormal metrics
+Built-in senders:
+- `verification/aliyun` — Alibaba Cloud Dysms SMS
+- `verification/smtp` — Standard SMTP email
 
 ## License
 
 MIT
-
-## Contributing
-
-Issues and Pull Requests are welcome!
