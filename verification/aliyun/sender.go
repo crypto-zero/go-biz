@@ -3,6 +3,8 @@ package aliyun
 import (
 	"context"
 	"fmt"
+	"strings"
+	"text/template"
 
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
@@ -28,20 +30,25 @@ func NewSMS(client *dysms.Client, template verification.TemplateProvider[verific
 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
 func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
-	if err := mobileCode.Validate(); err != nil {
-		return err
-	}
 	if mobileCode.CountryCode != verification.ChinaCountryCode {
 		return verification.ErrUnsupportedCountryCode
 	}
-	template, err := a.template.GetTemplate(mobileCode.Type)
+	tmpl, err := a.template.GetTemplate(mobileCode.Type)
 	if err != nil {
 		return err
 	}
-	return a.sendMessage(template.SignName,
-		mobileCode.Mobile,
-		template.Code, mobileCode.Format(template.ParamsFormat,
-			mobileCode.Code.Code))
+
+	t, err := template.New("sms").Parse(tmpl.ParamsFormat)
+	if err != nil {
+		return fmt.Errorf("failed to parse sms template: %w", err)
+	}
+
+	var buf strings.Builder
+	if err = t.Execute(&buf, mobileCode); err != nil {
+		return fmt.Errorf("failed to execute sms template: %w", err)
+	}
+
+	return a.sendMessage(tmpl.SignName, mobileCode.Mobile, tmpl.Code, buf.String())
 }
 
 // sendMessage sends an SMS message using the specified template.

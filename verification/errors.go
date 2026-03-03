@@ -1,6 +1,28 @@
 package verification
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
+
+// RateLimitError wraps a rate limit error with a retry duration.
+type RateLimitError struct {
+	Err     error
+	RetryIn time.Duration // Time until the rate limit resets
+}
+
+// Error implements the error interface.
+func (e *RateLimitError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "rate limit exceeded"
+}
+
+// Unwrap returns the underlying error.
+func (e *RateLimitError) Unwrap() error {
+	return e.Err
+}
 
 var (
 	// ErrSendFailed represents a generic send failure.
@@ -12,6 +34,8 @@ var (
 	ErrCodeTypeIsEmpty = errors.New("verification code type is empty")
 	// ErrCodeIncorrect represents a verification code incorrect error.
 	ErrCodeIncorrect = errors.New("verification code is incorrect")
+	// ErrCodeIsEmpty represents an empty verification code error.
+	ErrCodeIsEmpty = errors.New("verification code is empty")
 	// ErrMobileSendLimitExceeded indicates that the mobile number has exceeded the limit for sending OTPs.
 	ErrMobileSendLimitExceeded = errors.New("mobile send OTP limit exceeded")
 	// ErrMobileVerifyLimitExceeded indicates that the mobile number has exceeded the limit for verifying OTPs.
@@ -31,10 +55,6 @@ var (
 	ErrMobileCodeMobileIsEmpty = errors.New("mobile code mobile is empty")
 	// ErrMobileCodeCountryCodeIsEmpty represents an empty country code error.
 	ErrMobileCodeCountryCodeIsEmpty = errors.New("mobile code country code is empty")
-	// ErrMobileCodeCodeIsEmpty represents an empty code error.
-	ErrMobileCodeCodeIsEmpty = errors.New("mobile code code is empty")
-	// ErrMobileCodeTypeIsEmpty represents an empty code type error.
-	ErrMobileCodeTypeIsEmpty = errors.New("mobile code type is empty")
 	// ErrUnsupportedCountryCode represents an unsupported country code error.
 	ErrUnsupportedCountryCode = errors.New("unsupported country code")
 
@@ -42,10 +62,13 @@ var (
 	ErrNilEmailCode = errors.New("email code is nil")
 	// ErrEmailCodeEmailIsEmpty represents an empty email error.
 	ErrEmailCodeEmailIsEmpty = errors.New("email code email is empty")
-	// ErrEmailCodeCodeIsEmpty represents an empty code error.
-	ErrEmailCodeCodeIsEmpty = errors.New("email code code is empty")
-	// ErrEmailCodeTypeIsEmpty represents an empty code type error.
-	ErrEmailCodeTypeIsEmpty = errors.New("email code type is empty")
 	// ErrEmailTemplateNotFound represents an email template not found error.
 	ErrEmailTemplateNotFound = errors.New("email template not found")
+
+	// ErrNilEcdsaCode represents a nil ecdsa code error.
+	ErrNilEcdsaCode = errors.New("ecdsa code is nil")
+	// ErrEcdsaCodeChainIsEmpty represents an empty chain error.
+	ErrEcdsaCodeChainIsEmpty = errors.New("ecdsa code chain is empty")
+	// ErrEcdsaCodeAddressIsEmpty represents an empty address error.
+	ErrEcdsaCodeAddressIsEmpty = errors.New("ecdsa code address is empty")
 )

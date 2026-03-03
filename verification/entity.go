@@ -29,6 +29,17 @@ func (c Code) GetSequence() string { return c.Sequence }
 // GetType returns the code type.
 func (c Code) GetType() CodeType { return c.Type }
 
+// validate checks that common base fields are populated.
+func (c Code) validate() error {
+	if c.Code == "" {
+		return ErrCodeIsEmpty
+	}
+	if c.Type == "" {
+		return ErrCodeTypeIsEmpty
+	}
+	return nil
+}
+
 // MobileCode represents a mobile verification code.
 type MobileCode struct {
 	Code
@@ -39,12 +50,6 @@ type MobileCode struct {
 func (c MobileCode) Medium() string          { return "MOBILE" }
 func (c MobileCode) CacheKeyParts() []string { return []string{c.Sequence, c.Mobile, c.CountryCode} }
 func (c MobileCode) LimitKeyParts() []string { return []string{c.Mobile, c.CountryCode} }
-
-// Format returns a formatted string using the given format and args.
-// Typically used to format SMS template parameters, e.g. Format(`{"code":"%s"}`, code).
-func (c MobileCode) Format(format string, args ...any) string {
-	return fmt.Sprintf(format, args...)
-}
 
 // NewMobileCode creates a MobileCode from a base Code.
 func NewMobileCode(base Code, mobile, countryCode string) *MobileCode {
@@ -62,13 +67,7 @@ func (c *MobileCode) Validate() error {
 	if c.CountryCode == "" {
 		return ErrMobileCodeCountryCodeIsEmpty
 	}
-	if c.Code.Code == "" {
-		return ErrMobileCodeCodeIsEmpty
-	}
-	if c.Type == "" {
-		return ErrMobileCodeTypeIsEmpty
-	}
-	return nil
+	return c.Code.validate()
 }
 
 // EmailCode represents an email verification code.
@@ -94,13 +93,7 @@ func (c *EmailCode) Validate() error {
 	if c.Email == "" {
 		return ErrEmailCodeEmailIsEmpty
 	}
-	if c.Code.Code == "" {
-		return ErrEmailCodeCodeIsEmpty
-	}
-	if c.Type == "" {
-		return ErrEmailCodeTypeIsEmpty
-	}
-	return nil
+	return c.Code.validate()
 }
 
 // EcdsaCode represents an ecdsa verification code.
@@ -122,25 +115,35 @@ func NewEcdsaCode(base Code, chain, address string) *EcdsaCode {
 	return &EcdsaCode{Code: base, Chain: chain, Address: address}
 }
 
-// Verifiable is satisfied by any code type that can return its verification code string.
-type Verifiable interface {
-	VerificationCode() string
+// Validate checks that all required fields are populated.
+func (c *EcdsaCode) Validate() error {
+	if c == nil {
+		return ErrNilEcdsaCode
+	}
+	if c.Chain == "" {
+		return ErrEcdsaCodeChainIsEmpty
+	}
+	if c.Address == "" {
+		return ErrEcdsaCodeAddressIsEmpty
+	}
+	return c.Code.validate()
 }
 
-// Codeable extends Verifiable with key-building metadata.
-// Satisfied by MobileCode, EmailCode, EcdsaCode via their methods.
-type Codeable interface {
-	Verifiable
-	Medium() string          // e.g. "MOBILE", "EMAIL", "ECDSA"
-	CacheKeyParts() []string // e.g. [sequence, mobile, countryCode]
-	LimitKeyParts() []string // e.g. [mobile, countryCode]  (no sequence)
-	GetSequence() string
-	GetType() CodeType
-}
-
-// VerificationCode is a type constraint for all verification code types.
+// VerificationCode is a type-set constraint for all verification code types.
 type VerificationCode interface {
 	MobileCode | EmailCode | EcdsaCode
+}
+
+// CodeConstraint is the unified generic constraint for OTPService.
+// It combines the type-set restriction with all required method behaviors.
+type CodeConstraint interface {
+	VerificationCode
+	VerificationCode() string // returns the raw code string for comparison
+	Medium() string           // e.g. "MOBILE", "EMAIL", "ECDSA"
+	CacheKeyParts() []string  // e.g. [sequence, mobile, countryCode]
+	LimitKeyParts() []string  // e.g. [mobile, countryCode]  (no sequence)
+	GetSequence() string
+	GetType() CodeType
 }
 
 // CodeSender sends a verification code.

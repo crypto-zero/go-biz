@@ -9,6 +9,7 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/crypto-zero/go-biz/verification"
@@ -48,10 +49,6 @@ func NewSender(config *Config, template verification.TemplateProvider[verificati
 
 // Send sends the email verification code via SMTP.
 func (s *Sender) Send(ctx context.Context, emailCode *verification.EmailCode) error {
-	if err := emailCode.Validate(); err != nil {
-		return err
-	}
-
 	tmpl, err := s.template.GetTemplate(emailCode.Type)
 	if err != nil {
 		return err
@@ -62,8 +59,17 @@ func (s *Sender) Send(ctx context.Context, emailCode *verification.EmailCode) er
 		contentType = "text/plain"
 	}
 
-	body := strings.ReplaceAll(tmpl.BodyFormat, "{{code}}", emailCode.Code.Code)
-	msg := s.buildMessage(emailCode.Email, tmpl.Subject, contentType, body)
+	t, err := template.New("email").Parse(tmpl.BodyFormat)
+	if err != nil {
+		return fmt.Errorf("failed to parse email template: %w", err)
+	}
+
+	var buf strings.Builder
+	if err = t.Execute(&buf, emailCode); err != nil {
+		return fmt.Errorf("failed to execute email template: %w", err)
+	}
+
+	msg := s.buildMessage(emailCode.Email, tmpl.Subject, contentType, buf.String())
 
 	if s.config.SSL {
 		return s.sendWithSSL(ctx, emailCode.Email, msg)

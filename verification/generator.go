@@ -1,7 +1,6 @@
 package verification
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,9 +11,9 @@ import (
 
 // CodeGenerator generates verification codes for all channels.
 type CodeGenerator interface {
-	NewMobileCode(ctx context.Context, typ CodeType, userID int64, mobile, countryCode string) (*MobileCode, error)
-	NewEmailCode(ctx context.Context, typ CodeType, userID int64, email string) (*EmailCode, error)
-	NewEcdsaCode(ctx context.Context, typ CodeType, userID int64, chain, address string) (*EcdsaCode, error)
+	NewMobileCode(typ CodeType, userID int64, mobile, countryCode string) (*MobileCode, error)
+	NewEmailCode(typ CodeType, userID int64, email string) (*EmailCode, error)
+	NewEcdsaCode(typ CodeType, userID int64, chain, address string) (*EcdsaCode, error)
 }
 
 // codeGenerator is the standard CodeGenerator implementation.
@@ -33,9 +32,6 @@ func NewCodeGenerator(codeLength int) CodeGenerator {
 	}
 	return &codeGenerator{codeLength: codeLength}
 }
-
-// DefaultCodeGenerator is a convenience CodeGenerator that produces 6-digit random codes.
-var DefaultCodeGenerator = NewCodeGenerator(6)
 
 // NewTestCodeGenerator creates a generator that always produces the given fixed code.
 // Intended for testing only — do not use in production.
@@ -73,8 +69,14 @@ func (g *codeGenerator) newBaseCode(typ CodeType, userID int64) (Code, error) {
 }
 
 func (g *codeGenerator) NewMobileCode(
-	_ context.Context, typ CodeType, userID int64, mobile, countryCode string,
+	typ CodeType, userID int64, mobile, countryCode string,
 ) (*MobileCode, error) {
+	if mobile == "" {
+		return nil, ErrMobileCodeMobileIsEmpty
+	}
+	if countryCode == "" {
+		return nil, ErrMobileCodeCountryCodeIsEmpty
+	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err
@@ -83,8 +85,11 @@ func (g *codeGenerator) NewMobileCode(
 }
 
 func (g *codeGenerator) NewEmailCode(
-	_ context.Context, typ CodeType, userID int64, email string,
+	typ CodeType, userID int64, email string,
 ) (*EmailCode, error) {
+	if email == "" {
+		return nil, ErrEmailCodeEmailIsEmpty
+	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err
@@ -93,8 +98,14 @@ func (g *codeGenerator) NewEmailCode(
 }
 
 func (g *codeGenerator) NewEcdsaCode(
-	_ context.Context, typ CodeType, userID int64, chain, address string,
+	typ CodeType, userID int64, chain, address string,
 ) (*EcdsaCode, error) {
+	if chain == "" {
+		return nil, ErrEcdsaCodeChainIsEmpty
+	}
+	if address == "" {
+		return nil, ErrEcdsaCodeAddressIsEmpty
+	}
 	base, err := g.newBaseCode(typ, userID)
 	if err != nil {
 		return nil, err

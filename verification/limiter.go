@@ -2,7 +2,6 @@ package verification
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -42,26 +41,24 @@ type LimitDecision struct {
 	ResetIn time.Duration // time until the window resets
 }
 
-// CodeLimiter provides key-based rate limiting and incorrect-count tracking.
-type CodeLimiter interface {
-	AllowSend(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error)
-	RollbackSend(ctx context.Context, key string) error
-	GetIncorrectCount(ctx context.Context, key string) (int64, error)
-	IncrementIncorrect(ctx context.Context, key string, maxAttempts int64, window time.Duration) (*LimitDecision, error)
-	DeleteIncorrect(ctx context.Context, key string) error
+// RateLimiter provides generic fixed-window rate limiting.
+type RateLimiter interface {
+	Allow(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error)
+	Rollback(ctx context.Context, key string) error
+	Delete(ctx context.Context, key string) error
 }
 
-// RedisCodeLimiter implements CodeLimiter backed by Redis + Lua.
-type RedisCodeLimiter struct {
+// RedisRateLimiter implements RateLimiter backed by Redis + Lua.
+type RedisRateLimiter struct {
 	client redis.UniversalClient
 }
 
-// NewRedisCodeLimiter creates a CodeLimiter backed by the given Redis client.
-func NewRedisCodeLimiter(client redis.UniversalClient) CodeLimiter {
-	return &RedisCodeLimiter{client: client}
+// NewRedisRateLimiter creates a RateLimiter backed by the given Redis client.
+func NewRedisRateLimiter(client redis.UniversalClient) RateLimiter {
+	return &RedisRateLimiter{client: client}
 }
 
-func (l *RedisCodeLimiter) evalFixedWindow(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error) {
+func (l *RedisRateLimiter) Allow(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error) {
 	if window <= 0 {
 		return nil, fmt.Errorf("invalid window duration: %d", window)
 	}
@@ -83,14 +80,10 @@ func (l *RedisCodeLimiter) evalFixedWindow(ctx context.Context, key string, limi
 	}, nil
 }
 
-func (l *RedisCodeLimiter) AllowSend(ctx context.Context, key string, limit int64, window time.Duration) (*LimitDecision, error) {
-	return l.evalFixedWindow(ctx, key, limit, window)
-}
-
-func (l *RedisCodeLimiter) RollbackSend(ctx context.Context, key string) error {
+func (l *RedisRateLimiter) Rollback(ctx context.Context, key string) error {
 	val, err := l.client.Decr(ctx, key).Result()
 	if err != nil {
-		return fmt.Errorf("verification: rollback send failed: %w", err)
+		return fmt.Errorf("verification: rollback failed: %w", err)
 	}
 	// If the counter dropped below zero (shouldn't happen, but be safe), reset to 0.
 	if val < 0 {
@@ -99,21 +92,9 @@ func (l *RedisCodeLimiter) RollbackSend(ctx context.Context, key string) error {
 	return nil
 }
 
-func (l *RedisCodeLimiter) GetIncorrectCount(ctx context.Context, key string) (int64, error) {
-	cnt, err := l.client.Get(ctx, key).Int64()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
+func (l *RedisRateLimiter) Delete(ctx context.Context, key string) error {
+	if err := l.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("verification: redis del failed: %w", err)
 	}
-	if err != nil {
-		return 0, fmt.Errorf("verification: get incorrect count failed: %w", err)
-	}
-	return cnt, nil
-}
-
-func (l *RedisCodeLimiter) IncrementIncorrect(ctx context.Context, key string, maxAttempts int64, window time.Duration) (*LimitDecision, error) {
-	return l.evalFixedWindow(ctx, key, maxAttempts, window)
-}
-
-func (l *RedisCodeLimiter) DeleteIncorrect(ctx context.Context, key string) error {
-	return deleteCode(ctx, l.client, key)
+	return nil
 }

@@ -106,11 +106,11 @@ func TestVerification_CodeStore_Basics(t *testing.T) {
 	ecdsaStore := NewRedisCodeStore[EcdsaCode](client)
 
 	t.Run("email set/get", func(t *testing.T) {
-		code, err := gen.NewEmailCode(ctx, "TEST_TYPE", 1, "abc@def.com")
+		code, err := gen.NewEmailCode("TEST_TYPE", 1, "abc@def.com")
 		assert.NoError(t, err)
 		key := keys.CodeKey("EMAIL", code.Type, code.Sequence, code.Email)
 		assert.NoError(t, emailStore.Set(ctx, key, code, time.Minute))
-		emailCode, err := emailStore.Get(ctx, key)
+		emailCode, err := emailStore.Peek(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, emailCode)
 		assert.Equal(t, code.Content, emailCode.Content)
@@ -118,19 +118,19 @@ func TestVerification_CodeStore_Basics(t *testing.T) {
 	})
 
 	t.Run("email expired", func(t *testing.T) {
-		code, _ := gen.NewEmailCode(ctx, "TEST_TYPE", 1, "abc@def.com")
+		code, _ := gen.NewEmailCode("TEST_TYPE", 1, "abc@def.com")
 		key := keys.CodeKey("EMAIL", code.Type, code.Sequence, code.Email)
 		_ = emailStore.Set(ctx, key, code, time.Second)
 		ff(2 * time.Second)
-		_, err := emailStore.Get(ctx, key)
+		_, err := emailStore.Peek(ctx, key)
 		assert.Equal(t, ErrCodeNotFound, err)
 	})
 
 	t.Run("mobile set/get", func(t *testing.T) {
-		code, _ := gen.NewMobileCode(ctx, "TEST_TYPE", 1, "13566667777", "86")
+		code, _ := gen.NewMobileCode("TEST_TYPE", 1, "13566667777", "86")
 		key := keys.CodeKey("MOBILE", code.Type, code.Sequence, code.Mobile, code.CountryCode)
 		_ = mobileStore.Set(ctx, key, code, time.Minute)
-		mobileCode, err := mobileStore.Get(ctx, key)
+		mobileCode, err := mobileStore.Peek(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, mobileCode)
 		assert.Equal(t, code.Content, mobileCode.Content)
@@ -138,10 +138,10 @@ func TestVerification_CodeStore_Basics(t *testing.T) {
 	})
 
 	t.Run("ecdsa set/get", func(t *testing.T) {
-		code, _ := gen.NewEcdsaCode(ctx, "TEST_TYPE", 1, "ETHEREUM", "0xabc")
+		code, _ := gen.NewEcdsaCode("TEST_TYPE", 1, "ETHEREUM", "0xabc")
 		key := keys.CodeKey("ECDSA", code.Type, code.Sequence, code.Chain, code.Address)
 		_ = ecdsaStore.Set(ctx, key, code, time.Minute)
-		ecdsaCode, err := ecdsaStore.Get(ctx, key)
+		ecdsaCode, err := ecdsaStore.Peek(ctx, key)
 		assert.NoError(t, err)
 		assert.NotNil(t, ecdsaCode)
 		assert.Equal(t, code.Content, ecdsaCode.Content)
@@ -158,7 +158,7 @@ func TestVerification_Service_SendAndVerify_Fixed6(t *testing.T) {
 	keys := NewCacheKeyBuilder("TEST")
 	svc := NewOTPService[MobileCode](mobileTestConfig(10, 10), client, fake)
 
-	mc, err := gen.NewMobileCode(ctx, "login", 123, "13800138000", "86")
+	mc, err := gen.NewMobileCode("login", 123, "13800138000", "86")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, mc)
 	assert.NoError(t, err)
@@ -189,7 +189,7 @@ func TestVerification_Service_SendAndVerify_Random4(t *testing.T) {
 	keys := NewCacheKeyBuilder("TEST")
 	svc := NewOTPService[MobileCode](mobileTestConfig(10, 10), client, fake)
 
-	mc, err := gen.NewMobileCode(ctx, "login", 123, "13800138000", "86")
+	mc, err := gen.NewMobileCode("login", 123, "13800138000", "86")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, mc)
 	assert.NoError(t, err)
@@ -218,7 +218,7 @@ func TestVerification_Service_VerifyFailKeepsCode(t *testing.T) {
 	keys := NewCacheKeyBuilder("TEST")
 	svc := NewOTPService[MobileCode](mobileTestConfig(10, 10), client, fake)
 
-	mc, err := gen.NewMobileCode(ctx, "login", 123, "13800138000", "86")
+	mc, err := gen.NewMobileCode("login", 123, "13800138000", "86")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, mc)
 	assert.NoError(t, err)
@@ -251,7 +251,7 @@ func TestOTPServiceImpl_Integration_SendAndVerifyLimit(t *testing.T) {
 		VerifyLimitErr: ErrMobileVerifyLimitExceeded,
 	}, client, sender)
 
-	mc, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, mc)
 	assert.NoError(t, err)
@@ -295,7 +295,7 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 		VerifyLimitErr: ErrMobileVerifyLimitExceeded,
 	}, client, sender)
 
-	mc, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, mc)
 	assert.NoError(t, err)
@@ -306,7 +306,7 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Send another OTP
-	mc2, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc2, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq2, err := svc.Send(ctx, mc2)
 	assert.NoError(t, err)
@@ -318,7 +318,7 @@ func TestOTPServiceImpl_Integration_AdvancedCases(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCodeNotFound)
 
 	// Send again and test limit
-	mc3, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc3, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq3, err := svc.Send(ctx, mc3)
 	assert.NoError(t, err)
@@ -346,20 +346,20 @@ func TestOTPServiceImpl_Integration_SendLimitExceeded(t *testing.T) {
 		VerifyLimitErr: ErrMobileVerifyLimitExceeded,
 	}, client, sender)
 
-	mc1, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc1, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq1, err := svc.Send(ctx, mc1)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq1)
 
-	mc2, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc2, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	seq2, err := svc.Send(ctx, mc2)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq2)
 
 	// Third send should hit limit
-	mc3, err := gen.NewMobileCode(ctx, "login", 1, "13800138000", "86")
+	mc3, err := gen.NewMobileCode("login", 1, "13800138000", "86")
 	assert.NoError(t, err)
 	_, err = svc.Send(ctx, mc3)
 	assert.ErrorIs(t, err, ErrMobileSendLimitExceeded)
@@ -384,7 +384,7 @@ func TestOTPServiceImpl_EmailOTP_SendAndVerify(t *testing.T) {
 		VerifyLimitErr: ErrEmailVerifyLimitExceeded,
 	}, client, emailSender)
 
-	ec, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, ec)
 	assert.NoError(t, err)
@@ -413,7 +413,7 @@ func TestOTPServiceImpl_EmailOTP_VerifyFailKeepsCode(t *testing.T) {
 	gen := NewTestCodeGenerator("666666")
 	svc := NewOTPService[EmailCode](emailTestConfig(5, 5), client, emailSender)
 
-	ec, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, ec)
 	assert.NoError(t, err)
@@ -443,7 +443,7 @@ func TestOTPServiceImpl_EmailOTP_VerifyLimitExceeded(t *testing.T) {
 	gen := NewTestCodeGenerator("666666")
 	svc := NewOTPService[EmailCode](emailTestConfig(5, 2), client, emailSender)
 
-	ec, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	seq, err := svc.Send(ctx, ec)
 	assert.NoError(t, err)
@@ -473,20 +473,20 @@ func TestOTPServiceImpl_EmailOTP_SendLimitExceeded(t *testing.T) {
 	gen := NewTestCodeGenerator("666666")
 	svc := NewOTPService[EmailCode](emailTestConfig(2, 5), client, emailSender)
 
-	ec1, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec1, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	seq1, err := svc.Send(ctx, ec1)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq1)
 
-	ec2, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec2, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	seq2, err := svc.Send(ctx, ec2)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, seq2)
 
 	// Third send should hit limit
-	ec3, err := gen.NewEmailCode(ctx, "login", 1, "user@example.com")
+	ec3, err := gen.NewEmailCode("login", 1, "user@example.com")
 	assert.NoError(t, err)
 	_, err = svc.Send(ctx, ec3)
 	assert.ErrorIs(t, err, ErrEmailSendLimitExceeded)
