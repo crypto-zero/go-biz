@@ -56,7 +56,7 @@ func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error
 		return fmt.Errorf("failed to execute sms template: %w", err)
 	}
 
-	return a.sendMessage(ct.signName, mobileCode.GetValue(), ct.templateCode, buf.String())
+	return a.sendMessage(ct.signName, mobileCode.Mobile, ct.templateCode, buf.String())
 }
 
 // getTemplate returns a cached, pre-parsed template for the given code type.
