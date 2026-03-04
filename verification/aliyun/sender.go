@@ -1,90 +1,84 @@
 package aliyun
 
 import (
-	"fmt"
 	"context"
-	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"text/template"
 
-	"github.com/crypto-zero/go-biz/verification"
-	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
+	dysms "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
+	"github.com/crypto-zero/go-biz/verification"
 )
 
-var (
-	ErrTemplateNotFound = errors.New("template not found")
-)
-
-type TemplateMapper map[verification.CodeType]*Template
-
-// SMS implements MobileCodeSender using Alibaba Cloud Dysms API.
+// SMS implements CodeSender[MobileCode] using Alibaba Cloud Dysms API.
 type SMS struct {
 	mainlandClient *dysms.Client
-	template       TemplateMapper
+	provider       verification.TemplateProvider[verification.SMSTemplate]
+	tmplCache      sync.Map // map[CodeType]*cachedSMSTemplate
 }
 
-// Template represents an SMS template with code and sign.
-type Template struct {
-	TaskID       string `json:"task_id"`       // Optional: used for global SMS
-	Code         string `json:"code"`          // Template code
-	SignName     string `json:"sign_name"`     // Sign name
-	ParamsFormat string `json:"params_format"` // JSON format string for template parameters, e.g., `{"code":"%s"}`
+// cachedSMSTemplate holds a pre-parsed SMS template alongside its metadata.
+type cachedSMSTemplate struct {
+	tmpl         *template.Template
+	signName     string
+	templateCode string // Alibaba Cloud SMS template ID, e.g. "SMS_123456"
 }
 
-// Compile-time assertion: AliyunSMS implements MobileCodeSender.
-var _ verification.MobileCodeSender = (*SMS)(nil)
+// Compile-time assertion: SMS implements CodeSender[MobileCode].
+var _ verification.CodeSender[verification.MobileCode] = (*SMS)(nil)
 
-// NewSMS creates a new AliyunSMS with the given Dysms client.
-func NewSMS(client *dysms.Client, template TemplateMapper) *SMS {
+// NewSMS creates a new SMS with the given Dysms client.
+func NewSMS(client *dysms.Client, provider verification.TemplateProvider[verification.SMSTemplate]) *SMS {
 	return &SMS{
 		mainlandClient: client,
-		template:       template,
+		provider:       provider,
 	}
 }
 
 // Send sends a mobile code using the appropriate template based on the MobileCode type.
+//
+// Note: The Alibaba Cloud Dysms SDK (v3) does not accept context.Context in
+// SendSms. Consider upgrading to SendSmsWithOptions + RuntimeOptions for
+// timeout control when the SDK supports it.
 func (a *SMS) Send(_ context.Context, mobileCode *verification.MobileCode) error {
-	if mobileCode == nil {
-		return verification.ErrNilMobileCode
+	if mobileCode.CountryCode != verification.ChinaCountryCode {
+		return verification.ErrUnsupportedCountryCode
 	}
-	if mobileCode.CountryCode == "" {
-		return verification.ErrMobileCodeCountryCodeIsEmpty
-	}
-	if mobileCode.Mobile == "" {
-		return verification.ErrMobileCodeMobileIsEmpty
-	}
-	if mobileCode.Code.Code == "" {
-		return verification.ErrMobileCodeCodeIsEmpty
-	}
-	if mobileCode.Type == "" {
-		return verification.ErrMobileCodeTypeIsEmpty
-	}
-	template, err := a.getTemplateByType(mobileCode.Type)
+	ct, err := a.getTemplate(mobileCode.Type)
 	if err != nil {
 		return err
 	}
-	if err = a.sendMessageWithTemplate(template.SignName,
-		mobileCode.CountryCode, mobileCode.Mobile,
-		template.Code, mobileCode.Format(template.ParamsFormat,
-			mobileCode.Code.Code)); err != nil {
-		return err
+
+	var buf strings.Builder
+	if err = ct.tmpl.Execute(&buf, mobileCode); err != nil {
+		return fmt.Errorf("failed to execute sms template: %w", err)
 	}
-	return nil
+
+	return a.sendMessage(ct.signName, mobileCode.GetValue(), ct.templateCode, buf.String())
 }
 
-// getTemplateByType retrieves the template for the given code type.
-func (a *SMS) getTemplateByType(typ verification.CodeType) (*Template, error) {
-	t, ok := a.template[typ]
-	if !ok {
-		return nil, ErrTemplateNotFound
+// getTemplate returns a cached, pre-parsed template for the given code type.
+func (a *SMS) getTemplate(typ verification.CodeType) (*cachedSMSTemplate, error) {
+	if cached, ok := a.tmplCache.Load(typ); ok {
+		return cached.(*cachedSMSTemplate), nil
 	}
-	return t, nil
+	tmpl, err := a.provider.GetTemplate(typ)
+	if err != nil {
+		return nil, err
+	}
+	t, err := template.New("sms").Parse(tmpl.ParamsFormat)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse sms template: %w", err)
+	}
+	ct := &cachedSMSTemplate{tmpl: t, signName: tmpl.SignName, templateCode: tmpl.Code}
+	a.tmplCache.Store(typ, ct)
+	return ct, nil
 }
 
-// sendMessageWithTemplate sends an SMS message using the specified template. only supports China country code.
-func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templateCode, templateParam string) error {
-	if countryCode != verification.ChinaCountryCode {
-		return verification.ErrUnsupportedCountryCode
-	}
+// sendMessage sends an SMS message using the specified template.
+func (a *SMS) sendMessage(signName, phoneNumber, templateCode, templateParam string) error {
 	request := &dysms.SendSmsRequest{}
 	request.SetSignName(signName)
 	request.SetPhoneNumbers(phoneNumber)
@@ -92,10 +86,10 @@ func (a *SMS) sendMessageWithTemplate(signName, countryCode, phoneNumber, templa
 	request.SetTemplateParam(templateParam)
 	response, err := a.mainlandClient.SendSms(request)
 	if err != nil {
-		return fmt.Errorf("aliyun sms send message failed, err: %w", err)
+		return fmt.Errorf("%w: %w", verification.ErrSendFailed, err)
 	}
-	if response.Body != nil && *response.Body.Code != "OK" {
-		return fmt.Errorf("aliyun sms send message failed, response body :%s", response.Body.GoString())
+	if response.Body != nil && response.Body.Code != nil && *response.Body.Code != "OK" {
+		return fmt.Errorf("%w, response: %s", verification.ErrSendFailed, response.Body.GoString())
 	}
 	return nil
 }
